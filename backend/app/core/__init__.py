@@ -1,0 +1,3 @@
+"""
+3XSHOP core package.
+"""

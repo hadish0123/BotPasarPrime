@@ -1,0 +1,239 @@
+from __future__ import annotations
+
+from decimal import Decimal
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.entities import Order, OrderItem, Plan, Product
+from app.shop_contract import PlanSnapshot, calculate_price
+
+
+async def get_product(
+    db: AsyncSession,
+    tenant_id: int,
+    product_id: int,
+) -> Product | None:
+    return await db.scalar(
+        select(Product).where(
+            Product.id == product_id,
+            Product.tenant_id == tenant_id,
+        )
+    )
+
+
+async def get_plan(
+    db: AsyncSession,
+    tenant_id: int,
+    plan_id: int,
+    active_only: bool = True,
+) -> Plan | None:
+    query = (
+        select(Plan)
+        .join(Product, Product.id == Plan.product_id)
+        .where(
+            Plan.id == plan_id,
+            Product.tenant_id == tenant_id,
+        )
+    )
+
+    if active_only:
+        query = query.where(
+            Plan.active.is_(True),
+            Product.active.is_(True),
+        )
+
+    return await db.scalar(query)
+
+
+async def create_product(
+    db: AsyncSession,
+    tenant_id: int,
+    name: str,
+    description: str | None = None,
+    category: str | None = None,
+) -> Product:
+    name = (name or "").strip()
+
+    if not name or len(name) > 150:
+        raise ValueError("invalid product name")
+
+    if category is not None:
+        category = category.strip()[:100] or None
+
+    product = Product(
+        tenant_id=tenant_id,
+        name=name,
+        description=description,
+        category=category,
+        active=True,
+    )
+
+    db.add(product)
+    await db.flush()
+
+    return product
+
+
+async def create_plan(
+    db: AsyncSession,
+    tenant_id: int,
+    product_id: int,
+    name: str,
+    price,
+    duration_days: int,
+    quota_gb: int | None = None,
+    discount_kind: str = "none",
+    discount_value=0,
+) -> Plan:
+    product = await get_product(
+        db,
+        tenant_id,
+        product_id,
+    )
+
+    if not product:
+        raise ValueError("product_not_found")
+
+    name = (name or "").strip()
+
+    if not name or len(name) > 120:
+        raise ValueError("invalid plan name")
+
+    if duration_days < 0:
+        raise ValueError("duration cannot be negative")
+
+    if quota_gb is not None and quota_gb < 0:
+        raise ValueError("quota cannot be negative")
+
+    price_result = calculate_price(
+        price,
+        discount_kind,
+        discount_value,
+    )
+
+    plan = Plan(
+        product_id=product.id,
+        name=name,
+        price=price_result.base_price,
+        duration_days=duration_days,
+        quota_gb=quota_gb,
+        active=True,
+    )
+
+    # These attributes are persisted by Page 10 migration.
+    plan.discount_kind = discount_kind
+    plan.discount_value = price_result.discount
+
+    db.add(plan)
+    await db.flush()
+
+    return plan
+
+
+async def build_plan_snapshot(
+    db: AsyncSession,
+    tenant_id: int,
+    plan_id: int,
+) -> tuple[Plan, Product, PlanSnapshot, Decimal]:
+    plan = await get_plan(
+        db,
+        tenant_id,
+        plan_id,
+        active_only=True,
+    )
+
+    if not plan:
+        raise ValueError("plan_not_found")
+
+    product = await get_product(
+        db,
+        tenant_id,
+        plan.product_id,
+    )
+
+    if not product or not product.active:
+        raise ValueError("product_not_found")
+
+    discount_kind = getattr(plan, "discount_kind", "none")
+    discount_value = getattr(plan, "discount_value", Decimal("0"))
+
+    price = calculate_price(
+        plan.price,
+        discount_kind,
+        discount_value,
+    )
+
+    snapshot = PlanSnapshot(
+        product_name=product.name,
+        plan_name=plan.name,
+        price=price.final_price,
+        duration_days=plan.duration_days,
+        quota_gb=plan.quota_gb,
+        category=product.category,
+    )
+
+    return plan, product, snapshot, price.final_price
+
+
+async def create_order_from_plan(
+    db: AsyncSession,
+    tenant_id: int,
+    user_id: int,
+    plan_id: int,
+    key: str,
+) -> Order:
+    if not tenant_id or not user_id:
+        raise ValueError("tenant_id and user_id are required")
+
+    key = (key or "").strip()
+
+    if not key or len(key) > 100:
+        raise ValueError("invalid idempotency key")
+
+    old = await db.scalar(
+        select(Order).where(
+            Order.tenant_id == tenant_id,
+            Order.idempotency_key == key,
+        )
+    )
+
+    if old:
+        return old
+
+    plan, product, snapshot, final_price = await build_plan_snapshot(
+        db,
+        tenant_id,
+        plan_id,
+    )
+
+    order = Order(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        status="created",
+        total=final_price,
+        idempotency_key=key,
+    )
+
+    db.add(order)
+    await db.flush()
+
+    item = OrderItem(
+        order_id=order.id,
+        plan_id=plan.id,
+        quantity=1,
+        unit_price=final_price,
+    )
+
+    # Immutable purchase snapshot.
+    item.snapshot_product_name = snapshot.product_name
+    item.snapshot_plan_name = snapshot.plan_name
+    item.snapshot_price = snapshot.price
+    item.snapshot_duration_days = snapshot.duration_days
+    item.snapshot_quota_gb = snapshot.quota_gb
+    item.snapshot_category = snapshot.category
+
+    db.add(item)
+    await db.flush()
+
+    return order

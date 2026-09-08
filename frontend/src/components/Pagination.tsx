@@ -1,0 +1,1 @@
+export default function Pagination(){return <div style={{marginTop:12}}>صفحه ۱</div>}

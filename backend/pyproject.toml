@@ -1,0 +1,34 @@
+[project]
+name = "3xshop"
+version = "1.0.0"
+description = "3XSHOP multi-tenant Telegram platform"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "BLE",
+]
+ignore = [
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "B",
+    "BLE",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

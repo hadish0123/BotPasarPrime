@@ -1,0 +1,1 @@
+export default function Confirm({children}:{children:React.ReactNode}){return <>{children}</>}

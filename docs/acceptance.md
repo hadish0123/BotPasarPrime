@@ -1,0 +1,13 @@
+# Acceptance checklist
+- [x] Two onboarding paths and owner approval state machine
+- [x] Tenant isolation primitives and scoped repositories
+- [x] Encrypted credentials/masked secrets
+- [x] RBAC permissions and owner/tenant boundaries
+- [x] Product/order/payment/wallet/coupon/referral domain
+- [x] Manual payment and provider adapter boundary
+- [x] Telegram initData validation
+- [x] Bot runtime lifecycle and logical isolation
+- [x] Notifications/scheduler/audit/reporting
+- [x] React RTL management UI
+- [x] Docker/env/migrations
+- [x] Critical security/test cases represented in tests

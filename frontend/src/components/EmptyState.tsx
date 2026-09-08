@@ -1,0 +1,1 @@
+export default function EmptyState(){return <div className="card">داده‌ای برای نمایش وجود ندارد.</div>}

@@ -1,0 +1,62 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!.env.test.example
+!.env.production.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Databases / runtime data
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Logs / runtime
+*.log
+logs/
+*.pid
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Backups
+*.bak
+*.backup
+.page*.backup
+
+# Development backups / historical snapshots
+*.page*-backup
+*.backup
+*.bak
+app.backup-*/
+bot.backup.*/
+
+# Generated backup snapshots
+*.page*-backup*
+*.page*-backup
+*.backup-*
+*.backup
+*.bak
+*.tsbuildinfo
