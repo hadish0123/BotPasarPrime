@@ -1,8 +1,8 @@
 """Complete missing tables required by Page 8 data model."""
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0003_page8_missing_tables"
 down_revision = "0002_page8_data_model"

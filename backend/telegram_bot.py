@@ -1,13 +1,13 @@
 import asyncio
 import os
+
 import httpx
-from pathlib import Path
 
 # Load root .env
 try:
     from dotenv import load_dotenv
     load_dotenv("/root/3XSHOP/.env")
-except Exception:
+except Exception:  # noqa: BLE001
     pass
 
 TOKEN = os.getenv("CENTRAL_BOT_TOKEN", "").strip()
@@ -126,7 +126,7 @@ async def main():
     # Remove webhook so long polling works on staging server
     try:
         await tg("deleteWebhook", drop_pending_updates=False)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print("deleteWebhook:", e)
 
     me = await tg("getMe")
@@ -147,10 +147,10 @@ async def main():
                 offset = update["update_id"] + 1
                 try:
                     await handle(update)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     print("UPDATE ERROR:", repr(e))
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print("POLL ERROR:", repr(e))
             await asyncio.sleep(3)
 

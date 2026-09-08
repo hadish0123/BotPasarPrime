@@ -5,9 +5,9 @@ Revision ID: 0005_page10_shop_snapshot
 Revises: 0004_page9_payment_hardening
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0005_page10_shop_snapshot"
 down_revision = "0004_page9_payment_hardening"

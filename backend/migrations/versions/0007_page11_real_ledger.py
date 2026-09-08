@@ -4,9 +4,9 @@ Revision ID: 0007_page11
 Revises: 0006_page11
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0007_page11"
 down_revision = "0006_page11"

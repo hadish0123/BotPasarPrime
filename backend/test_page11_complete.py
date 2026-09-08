@@ -1,8 +1,8 @@
 from decimal import Decimal
 
 from app.wallet_coupon_referral_contract import (
-    calculate_coupon_discount,
     calculate_commission,
+    calculate_coupon_discount,
     validate_referral,
 )
 

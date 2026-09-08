@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.notifications.contracts import (
     NOTIFICATION_TYPES,
@@ -16,7 +16,6 @@ from app.scheduler.contracts import (
     build_run_key,
 )
 from app.scheduler.runner import IdempotentScheduler
-
 
 print("PAGE 16 NOTIFICATIONS & SCHEDULER CONTRACT: START")
 
@@ -110,7 +109,7 @@ run_key = build_run_key(
 job = SchedulerJob(
     job_type=JobType.EXPIRY_WARNING,
     run_key=run_key,
-    scheduled_at=datetime.now(timezone.utc),
+    scheduled_at=datetime.now(UTC),
 )
 
 assert scheduler.run_once(

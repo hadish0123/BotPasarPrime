@@ -5,9 +5,9 @@ migration are preserved. Missing relational structures required by the
 3XSHOP data-model contract are added here.
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0002_page8_data_model"
 down_revision = "0001_initial"

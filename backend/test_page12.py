@@ -48,7 +48,7 @@ def main():
 
     try:
         require_same_tenant(1, 2)
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
     else:
         raise AssertionError(

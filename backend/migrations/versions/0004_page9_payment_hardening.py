@@ -5,9 +5,9 @@ Revision ID: 0004_page9_payment_hardening
 Revises: 0003_page8_missing_tables
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "0004_page9_payment_hardening"
 down_revision = "0003_page8_missing_tables"

@@ -1,9 +1,6 @@
 
-import asyncio
-from decimal import Decimal
 
 from app.payments_contract import (
-    PaymentStatus,
     payment_snapshot,
     validate_transition,
 )

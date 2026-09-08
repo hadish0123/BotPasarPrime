@@ -1,5 +1,4 @@
 from app.audit.security_audit import AuditEvent, is_sensitive_action
-from app.security.backup import calculate_sha256
 from app.security.csrf import generate_csrf_token, verify_csrf_token
 from app.security.rate_limit import LoginAttemptLimiter, RateLimiter
 from app.security.security_contract import (
@@ -9,10 +8,8 @@ from app.security.security_contract import (
     require_tls,
     sanitize_mapping,
     security_snapshot,
-    validate_telegram_init_data,
     verify_webhook_secret,
 )
-
 
 print("PAGE 14 SECURITY CONTRACT: START")
 
@@ -46,7 +43,7 @@ verify_webhook_secret("abc123", "abc123")
 try:
     verify_webhook_secret("wrong", "abc123")
     raise AssertionError("Webhook secret check failed")
-except Exception:
+except Exception:  # noqa: BLE001
     pass
 print("WEBHOOK_SECRET_PATH: ENABLED")
 
@@ -71,7 +68,7 @@ limiter.check("ip:test")
 try:
     limiter.check("ip:test")
     raise AssertionError("Rate limiter failed")
-except Exception:
+except Exception:  # noqa: BLE001
     pass
 print("RATE_LIMIT: ENABLED")
 
@@ -81,7 +78,7 @@ login.check("user:test")
 try:
     login.check("user:test")
     raise AssertionError("Login limiter failed")
-except Exception:
+except Exception:  # noqa: BLE001
     pass
 login.reset("user:test")
 print("LOGIN_ATTEMPT_LIMIT: ENABLED")

@@ -2,7 +2,6 @@ from app.api.v1.contracts import (
     API_ENDPOINTS,
     AuthenticationRequired,
     AuthorizationDenied,
-    TenantContextRequired,
     ValidationFailed,
     api_snapshot,
     verify_all_endpoint_contracts,
@@ -15,8 +14,6 @@ from app.api.v1.dependencies import (
     validate_positive_id,
 )
 from app.api.v1.openapi_contract import build_openapi_contract
-from app.api.v1.routes import ROUTES
-
 
 print("PAGE 15 API CONTRACT: START")
 
@@ -84,8 +81,8 @@ assert openapi["openapi"] == "3.1.0"
 assert len(openapi["paths"]) == 9
 assert "bearerAuth" in openapi["components"]["securitySchemes"]
 
-for path, methods in openapi["paths"].items():
-    for method, operation in methods.items():
+for _path, methods in openapi["paths"].items():
+    for _method, operation in methods.items():
         assert operation["security"]
         assert operation["x-tenant-context"] is True
         assert operation["x-authorization-permission"]

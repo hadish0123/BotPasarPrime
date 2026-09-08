@@ -1,9 +1,8 @@
 import asyncio
 
-from sqlalchemy import inspect, select
+from sqlalchemy import inspect
 
 from app.core.db import engine
-from app.models.entities import AuditLog
 from app.services.audit import (
     SENSITIVE_ACTIONS,
     audit,

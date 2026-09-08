@@ -1,6 +1,6 @@
 """3XSHOP initial schema"""
+
 from alembic import op
-import sqlalchemy as sa
 from app.models.entities import Base
 
 revision = "0001_initial"
