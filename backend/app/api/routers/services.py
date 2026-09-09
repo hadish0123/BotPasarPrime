@@ -8,7 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import bearer, require_permission, require_tenant_match
 from app.core.db import get_db
 from app.models.entities import Service
-from app.services.provisioning import get_service_subscription, renew_service, revoke_service
+from app.services.provisioning import (
+    get_service_subscription,
+    provision_service_for_order,
+    renew_service,
+    revoke_service,
+)
 
 r = APIRouter(prefix="/services", tags=["services"])
 
@@ -86,6 +91,46 @@ async def subscription(
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(502, "pasarguard_subscription_failed") from exc
+
+
+@r.post("/{service_id}/retry")
+async def retry_provisioning(
+    service_id: int,
+    tenant_id: int,
+    claims=Depends(require_permission("services.write")),
+    db: AsyncSession = Depends(get_db),
+):
+    require_tenant_match(tenant_id, claims)
+    service = await db.scalar(
+        select(Service).where(Service.id == service_id, Service.tenant_id == tenant_id)
+    )
+    if service is None:
+        raise HTTPException(404, "service_not_found")
+    if service.status != "provisioning_failed":
+        raise HTTPException(409, "service_not_retryable")
+    metadata = service.metadata_json or {}
+    try:
+        plan_id = int(metadata["plan_id"])
+        duration_days = int(metadata["duration_days"])
+        quota_gb = metadata.get("quota_gb")
+        quota_gb = int(quota_gb) if quota_gb is not None else None
+        result = await provision_service_for_order(
+            db,
+            tenant_id=tenant_id,
+            order_id=int(metadata["order_id"]),
+            user_id=service.user_id,
+            plan_id=plan_id,
+            duration_days=duration_days,
+            quota_gb=quota_gb,
+        )
+        await db.commit()
+        return _serialize(result)
+    except (KeyError, TypeError, ValueError) as exc:
+        await db.rollback()
+        raise HTTPException(409, "invalid_provisioning_metadata") from exc
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(502, "order_fulfillment_failed") from exc
 
 
 @r.post("/{service_id}/renew")
