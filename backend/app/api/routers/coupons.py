@@ -30,6 +30,15 @@ class CouponCreate(BaseModel):
     expires_at: datetime | None = None
 
 
+class CouponUpdate(BaseModel):
+    active: bool | None = None
+    value: Decimal | None = Field(default=None, ge=0)
+    max_discount: Decimal | None = Field(default=None, ge=0)
+    min_purchase: Decimal | None = Field(default=None, ge=0)
+    usage_limit: int | None = Field(default=None, ge=1)
+    expires_at: datetime | None = None
+
+
 @router.post("/validate")
 async def validate_coupon(
     tenant_id: int,
@@ -43,12 +52,7 @@ async def validate_coupon(
         coupon, discount = await calculate_coupon_for_order(db, tenant_id, code, subtotal)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
-    return {
-        "code": coupon.code,
-        "discount": str(money(discount)),
-        "subtotal": str(money(subtotal)),
-        "total": str(money(subtotal) - money(discount)),
-    }
+    return {"code": coupon.code, "discount": str(money(discount)), "subtotal": str(money(subtotal)), "total": str(money(subtotal) - money(discount))}
 
 
 @router.get("")
@@ -65,23 +69,7 @@ async def list_coupons(
     if tenant_id is not None:
         query = query.where(Coupon.tenant_id == tenant_id)
     rows = (await db.scalars(query)).all()
-    return [
-        {
-            "id": c.id,
-            "tenant_id": c.tenant_id,
-            "code": c.code,
-            "kind": c.kind,
-            "value": str(c.value),
-            "max_discount": str(c.max_discount) if c.max_discount is not None else None,
-            "min_purchase": str(c.min_purchase),
-            "usage_limit": c.usage_limit,
-            "used_count": c.used_count,
-            "active": c.active,
-            "starts_at": c.starts_at,
-            "expires_at": c.expires_at,
-        }
-        for c in rows
-    ]
+    return [{"id": c.id, "tenant_id": c.tenant_id, "code": c.code, "kind": c.kind, "value": str(c.value), "max_discount": str(c.max_discount) if c.max_discount is not None else None, "min_purchase": str(c.min_purchase), "usage_limit": c.usage_limit, "used_count": c.used_count, "active": c.active, "starts_at": c.starts_at, "expires_at": c.expires_at} for c in rows]
 
 
 @router.post("")
@@ -91,23 +79,13 @@ async def create_coupon(
     db: AsyncSession = Depends(get_db),
 ):
     require_tenant_match(payload.tenant_id, claims)
+    code = payload.code.strip().upper()
     if payload.expires_at and payload.starts_at and payload.expires_at <= payload.starts_at:
         raise HTTPException(400, "expires_at_must_follow_starts_at")
-    existing = await db.scalar(select(Coupon).where(Coupon.tenant_id == payload.tenant_id, Coupon.code == payload.code.strip().upper()))
+    existing = await db.scalar(select(Coupon).where(Coupon.tenant_id == payload.tenant_id, Coupon.code == code))
     if existing:
         raise HTTPException(409, "coupon_exists")
-    coupon = Coupon(
-        tenant_id=payload.tenant_id,
-        code=payload.code.strip().upper(),
-        kind=payload.kind,
-        value=payload.value,
-        max_discount=payload.max_discount,
-        min_purchase=payload.min_purchase,
-        usage_limit=payload.usage_limit,
-        starts_at=payload.starts_at,
-        expires_at=payload.expires_at,
-        active=True,
-    )
+    coupon = Coupon(tenant_id=payload.tenant_id, code=code, kind=payload.kind, value=payload.value, max_discount=payload.max_discount, min_purchase=payload.min_purchase, usage_limit=payload.usage_limit, starts_at=payload.starts_at, expires_at=payload.expires_at, active=True)
     db.add(coupon)
     await db.commit()
     await db.refresh(coupon)
@@ -117,8 +95,7 @@ async def create_coupon(
 @router.patch("/{coupon_id}")
 async def update_coupon(
     coupon_id: int,
-    active: bool | None = None,
-    value: Decimal | None = Field(default=None, ge=0),
+    payload: CouponUpdate,
     claims=Depends(require_permission("coupons.write")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -126,9 +103,17 @@ async def update_coupon(
     if coupon is None:
         raise HTTPException(404, "coupon_not_found")
     require_tenant_match(coupon.tenant_id, claims)
-    if active is not None:
-        coupon.active = active
-    if value is not None:
-        coupon.value = value
+    if payload.active is not None:
+        coupon.active = payload.active
+    if payload.value is not None:
+        coupon.value = payload.value
+    if payload.max_discount is not None:
+        coupon.max_discount = payload.max_discount
+    if payload.min_purchase is not None:
+        coupon.min_purchase = payload.min_purchase
+    if payload.usage_limit is not None:
+        coupon.usage_limit = payload.usage_limit
+    if payload.expires_at is not None:
+        coupon.expires_at = payload.expires_at
     await db.commit()
     return {"id": coupon.id, "active": coupon.active, "value": str(coupon.value)}
