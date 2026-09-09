@@ -72,7 +72,7 @@ async def update_settings(
         row = TenantSettings(tenant_id=tenant_id, settings=clean_settings)
         db.add(row)
     else:
-        row.settings = clean_settings
+        row.settings = {**(row.settings or {}), **clean_settings}
 
     branding_payload = payload.get("branding", {})
     if branding_payload and not isinstance(branding_payload, dict):
