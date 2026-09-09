@@ -28,7 +28,7 @@ export default function Coupons() {
 
   async function toggle(item: Coupon) {
     setBusy(item.id); setError("");
-    try { await api.post(`/coupons/${item.id}`, { active: !item.active }); await load(); } catch (e) { setError(e instanceof Error ? e.message : "تغییر وضعیت ناموفق بود"); } finally { setBusy(null); }
+    try { await api.patch(`/coupons/${item.id}`, { active: !item.active }); await load(); } catch (e) { setError(e instanceof Error ? e.message : "تغییر وضعیت ناموفق بود"); } finally { setBusy(null); }
   }
 
   return <section className="page" dir="rtl">
