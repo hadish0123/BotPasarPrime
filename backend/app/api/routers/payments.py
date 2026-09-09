@@ -9,8 +9,9 @@ from app.api.schemas import PaymentCreate
 from app.core.db import get_db
 from app.models.entities import Order, OrderItem, Payment
 from app.services.audit import audit_sensitive
-from app.services.payments import create_payment, get_payment, transition
 from app.services.provisioning import provision_service_for_order
+from app.services.referrals import award_commission_for_order
+from app.services.payments import create_payment, get_payment, transition
 from app.services.wallet import post_wallet_transaction
 
 r = APIRouter(prefix="/payments", tags=["payments"])
@@ -62,6 +63,10 @@ async def create(x: PaymentCreate, tenant_id: int, claims=Depends(bearer), db: A
         raise HTTPException(400, str(exc)) from None
     service = None
     if x.provider == "wallet" and payment.status == "paid":
+        try:
+            await award_commission_for_order(db, tenant_id=tenant_id, order_id=order.id, referred_user_id=order.user_id, order_amount=order.total)
+        except ValueError:
+            pass
         service = await _provision_paid_order(db, tenant_id, order)
     return {"id": payment.id, "order_id": payment.order_id, "status": payment.status, "provider": payment.provider, "service_id": service.id if service else None}
 
@@ -120,5 +125,11 @@ async def verify_payment(payment_id: int, tenant_id: int, approve: bool = True, 
     except ValueError as exc:
         await db.rollback()
         raise HTTPException(409, str(exc)) from None
-    service = await _provision_paid_order(db, tenant_id, order) if approve else None
+    service = None
+    if approve:
+        try:
+            await award_commission_for_order(db, tenant_id=tenant_id, order_id=order.id, referred_user_id=order.user_id, order_amount=order.total)
+        except ValueError:
+            pass
+        service = await _provision_paid_order(db, tenant_id, order)
     return {"id": payment.id, "order_id": order.id, "status": payment.status, "service_id": service.id if service else None, "service_status": service.status if service else ("provisioning_failed" if approve else None)}
