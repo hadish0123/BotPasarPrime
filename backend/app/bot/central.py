@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from sqlalchemy import func, select
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from app.core.config import settings
 from app.core.db import SessionLocal
