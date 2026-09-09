@@ -21,11 +21,8 @@ class Settings(BaseSettings):
     telegram_init_data_max_age: int = 300
     central_bot_enabled: bool = True
     tenant_bots_enabled: bool = True
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        extra="ignore",
-        case_sensitive=False,
-    )
+    mini_app_url: str = ""
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
     @field_validator("jwt_secret", "fernet_key", "telegram_webhook_secret")
     @classmethod
@@ -41,7 +38,6 @@ class Settings(BaseSettings):
             raise RuntimeError("RATE_LIMIT_PER_MINUTE must be positive")
         if not 30 <= self.telegram_init_data_max_age <= 86400:
             raise RuntimeError("TELEGRAM_INIT_DATA_MAX_AGE must be between 30 and 86400 seconds")
-
         if self.app_env.lower() in {"production", "prod"}:
             required = {
                 "JWT_SECRET": self.jwt_secret,
