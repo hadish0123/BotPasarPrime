@@ -13,6 +13,22 @@ class TenantCreate(StrictModel):
     path: str = Field(min_length=1, max_length=30)
 
 
+class OnboardingCreate(StrictModel):
+    slug: str = Field(min_length=2, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: str = Field(min_length=2, max_length=150)
+    path: str = Field(pattern=r"^(representative|personal)$")
+    pasarguard_url: str = Field(min_length=8, max_length=500)
+    pasarguard_api_token: str = Field(min_length=1, max_length=500)
+    pasarguard_username: str | None = Field(default=None, max_length=150)
+    bot_token: str = Field(min_length=20, max_length=500)
+    bot_name: str = Field(default="Sales Bot", min_length=2, max_length=100)
+    idempotency_key: str = Field(min_length=8, max_length=120)
+
+
+class OnboardingPaymentSubmit(StrictModel):
+    reference: str = Field(min_length=1, max_length=150)
+
+
 class ProductCreate(StrictModel):
     name: str = Field(min_length=1, max_length=150)
     description: str | None = Field(default=None, max_length=5000)
