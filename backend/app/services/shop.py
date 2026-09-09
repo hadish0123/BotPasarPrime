@@ -9,14 +9,32 @@ from app.models.entities import Order, OrderItem, Plan, Product
 from app.shop_contract import PlanSnapshot, calculate_price
 
 
-async def get_product(db: AsyncSession, tenant_id: int, product_id: int) -> Product | None:
-    return await db.scalar(select(Product).where(Product.id == product_id, Product.tenant_id == tenant_id))
+async def get_product(
+    db: AsyncSession,
+    tenant_id: int,
+    product_id: int,
+) -> Product | None:
+    return await db.scalar(
+        select(Product).where(
+            Product.id == product_id,
+            Product.tenant_id == tenant_id,
+        )
+    )
 
 
-async def get_plan(db: AsyncSession, tenant_id: int, plan_id: int, active_only: bool = True) -> Plan | None:
-    query = select(Plan).join(Product, Product.id == Plan.product_id).where(
-        Plan.id == plan_id,
-        Product.tenant_id == tenant_id,
+async def get_plan(
+    db: AsyncSession,
+    tenant_id: int,
+    plan_id: int,
+    active_only: bool = True,
+) -> Plan | None:
+    query = (
+        select(Plan)
+        .join(Product, Product.id == Plan.product_id)
+        .where(
+            Plan.id == plan_id,
+            Product.tenant_id == tenant_id,
+        )
     )
     if active_only:
         query = query.where(Plan.active.is_(True), Product.active.is_(True))
@@ -35,7 +53,13 @@ async def create_product(
         raise ValueError("invalid product name")
     if category is not None:
         category = category.strip()[:100] or None
-    product = Product(tenant_id=tenant_id, name=name, description=description, category=category, active=True)
+    product = Product(
+        tenant_id=tenant_id,
+        name=name,
+        description=description,
+        category=category,
+        active=True,
+    )
     db.add(product)
     await db.flush()
     return product
@@ -63,8 +87,6 @@ async def create_plan(
     if quota_gb is not None and quota_gb < 0:
         raise ValueError("quota cannot be negative")
 
-    # Validate pricing once, then persist the original base price and the
-    # requested discount parameters. The final price is calculated at order time.
     price_result = calculate_price(price, discount_kind, discount_value)
     plan = Plan(
         product_id=product.id,
@@ -93,7 +115,11 @@ async def build_plan_snapshot(
     if not product or not product.active:
         raise ValueError("product_not_found")
 
-    price = calculate_price(plan.price, plan.discount_kind or "none", plan.discount_value or 0)
+    price = calculate_price(
+        plan.price,
+        plan.discount_kind or "none",
+        plan.discount_value or 0,
+    )
     snapshot = PlanSnapshot(
         product_name=product.name,
         plan_name=plan.name,
@@ -118,13 +144,22 @@ async def create_order_from_plan(
     if not key or len(key) > 100:
         raise ValueError("invalid idempotency key")
 
-    old = await db.scalar(select(Order).where(Order.tenant_id == tenant_id, Order.idempotency_key == key))
+    old = await db.scalar(
+        select(Order).where(
+            Order.tenant_id == tenant_id,
+            Order.idempotency_key == key,
+        )
+    )
     if old:
         if old.user_id != user_id:
             raise ValueError("idempotency key belongs to another user")
         return old
 
-    plan, product, snapshot, final_price = await build_plan_snapshot(db, tenant_id, plan_id)
+    plan, product, snapshot, final_price = await build_plan_snapshot(
+        db,
+        tenant_id,
+        plan_id,
+    )
     order = Order(
         tenant_id=tenant_id,
         user_id=user_id,
