@@ -48,12 +48,19 @@ async def update_settings(
     db: AsyncSession = Depends(get_db),
 ):
     require_tenant_match(tenant_id, claims)
-    allowed_settings = {"currency", "support_username", "support_url", "referral_percent"}
+    allowed_settings = {
+        "currency",
+        "support_username",
+        "support_url",
+        "referral_percent",
+    }
     requested = payload.get("settings", {})
     if not isinstance(requested, dict):
         raise HTTPException(400, "settings must be an object")
     clean_settings = {
-        str(key): value for key, value in requested.items() if str(key) in allowed_settings
+        str(key): value
+        for key, value in requested.items()
+        if str(key) in allowed_settings
     }
     if len(clean_settings) != len(requested):
         raise HTTPException(400, "unsupported setting")
@@ -76,13 +83,17 @@ async def update_settings(
     if branding is None:
         branding = TenantBranding(tenant_id=tenant_id)
         db.add(branding)
-    branding.logo_url = str(branding_payload.get("logo_url", branding.logo_url or ""))[:500] or None
-    branding.primary_color = str(
-        branding_payload.get("primary_color", branding.primary_color or "")
-    )[:20] or None
-    branding.display_name = str(
-        branding_payload.get("display_name", branding.display_name or "")
-    )[:150] or None
+    branding.logo_url = (
+        str(branding_payload.get("logo_url", branding.logo_url or ""))[:500] or None
+    )
+    branding.primary_color = (
+        str(branding_payload.get("primary_color", branding.primary_color or ""))[:20]
+        or None
+    )
+    branding.display_name = (
+        str(branding_payload.get("display_name", branding.display_name or ""))[:150]
+        or None
+    )
 
     audit_sensitive(
         db,
@@ -92,7 +103,10 @@ async def update_settings(
         actor_id=claims.get("user_id") or claims.get("sub"),
         target_type="tenant_settings",
         target_id=tenant_id,
-        metadata={"settings_keys": sorted(clean_settings), "branding_updated": bool(branding_payload)},
+        metadata={
+            "settings_keys": sorted(clean_settings),
+            "branding_updated": bool(branding_payload),
+        },
     )
     await db.commit()
     return await get_settings(tenant_id=tenant_id, claims=claims, db=db)
