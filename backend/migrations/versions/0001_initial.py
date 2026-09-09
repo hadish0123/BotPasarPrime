@@ -7,6 +7,7 @@ Later migrations only add indexes or compatibility structures.
 from alembic import op
 
 from app.models.entities import Base
+from app.models.onboarding import OnboardingPayment  # noqa: F401
 
 revision = "0001_initial"
 down_revision = None
