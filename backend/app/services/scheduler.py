@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.core.db import SessionLocal
 from app.models.entities import Notification, Service
+from app.services.notifications import deliver_pending
 
 log = logging.getLogger("3xshop.scheduler")
 
@@ -70,7 +71,7 @@ async def process_expiries() -> None:
                     idempotency_key=f"service-expired:{service.id}",
                 )
                 metadata["expiry_notified"] = True
-                changed = changed or added or service.status == "expired"
+                changed = changed or added or True
                 service.metadata_json = metadata
             elif (
                 service.expires_at
@@ -90,6 +91,7 @@ async def process_expiries() -> None:
                 changed = changed or added or True
         if changed:
             await db.commit()
+        await deliver_pending(db)
 
 
 async def scheduler_loop(stop_event: asyncio.Event) -> None:
