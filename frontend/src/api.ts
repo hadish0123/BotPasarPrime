@@ -34,6 +34,10 @@ export const api = {
     const response = await apiClient.put<T>(path, body);
     return response.data;
   },
+  async patch<T>(path: string, body?: unknown): Promise<T> {
+    const response = await apiClient.patch<T>(path, body);
+    return response.data;
+  },
   async delete<T>(path: string): Promise<T> {
     const response = await apiClient.delete<T>(path);
     return response.data;
