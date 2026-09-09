@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import bearer, require_tenant_match
+from app.api.deps import bearer, require_permission, require_tenant_match
 from app.core.db import get_db
 from app.models.entities import Service
+from app.services.provisioning import renew_service, revoke_service
 
 r = APIRouter(prefix="/services", tags=["services"])
 
@@ -25,6 +27,11 @@ def _serialize(service: Service) -> dict:
         "expires_at": service.expires_at,
         "metadata": service.metadata_json or {},
     }
+
+
+class RenewalRequest(BaseModel):
+    duration_days: int = Field(ge=1, le=3650)
+    quota_gb: int | None = Field(default=None, ge=1, le=10_000_000)
 
 
 @r.get("")
@@ -48,3 +55,40 @@ async def read_service(service_id: int, tenant_id: int, claims=Depends(bearer), 
     if not _admin(claims) and service.user_id != current_user:
         raise HTTPException(403, "forbidden")
     return _serialize(service)
+
+
+@r.post("/{service_id}/renew")
+async def renew(service_id: int, tenant_id: int, payload: RenewalRequest, claims=Depends(bearer), db: AsyncSession = Depends(get_db)):
+    require_tenant_match(tenant_id, claims)
+    current_user = int(claims.get("user_id") or claims.get("sub"))
+    service = await db.scalar(select(Service).where(Service.id == service_id, Service.tenant_id == tenant_id))
+    if service is None:
+        raise HTTPException(404, "service_not_found")
+    if not _admin(claims) and service.user_id != current_user:
+        raise HTTPException(403, "forbidden")
+    try:
+        result = await renew_service(db, tenant_id=tenant_id, service_id=service_id, duration_days=payload.duration_days, quota_gb=payload.quota_gb)
+        await db.commit()
+        return _serialize(result)
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(502, "pasarguard_renewal_failed") from exc
+
+
+@r.post("/{service_id}/revoke")
+async def revoke(service_id: int, tenant_id: int, claims=Depends(bearer), db: AsyncSession = Depends(get_db)):
+    require_tenant_match(tenant_id, claims)
+    require_permission(claims, "services.write")
+    try:
+        result = await revoke_service(db, tenant_id=tenant_id, service_id=service_id)
+        await db.commit()
+        return _serialize(result)
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(502, "pasarguard_revoke_failed") from exc
