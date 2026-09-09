@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import bearer
 from app.api.schemas import OnboardingCreate, OnboardingPaymentSubmit
 from app.core.db import get_db
-from app.services.onboarding import create_onboarding, submit_activation_payment
+from app.core.config import settings
+from app.services.onboarding import activation_fee, create_onboarding, submit_activation_payment
 
 r = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
@@ -45,7 +46,9 @@ async def register_tenant(
         "approval_id": approval.id,
         "status": tenant.status,
         "path": approval.path,
-        "activation_fee_toman": 0 if approval.path == "primevpn_representative" else 250000,
+        "activation_fee_toman": activation_fee(approval.path),
+        "pasarguard_health": "verified",
+        "configured_activation_fee_toman": int(settings.activation_fee_toman),
     }
 
 
