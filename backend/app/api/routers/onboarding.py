@@ -34,20 +34,13 @@ async def register_tenant(payload: OnboardingCreate, claims=Depends(bearer), db:
             submitted_telegram_id=int(telegram_id),
             bot_token=payload.bot_token,
             idempotency_key=payload.idempotency_key,
+            bot_name=payload.bot_name,
         )
         await db.commit()
     except ValueError as exc:
         await db.rollback()
         raise HTTPException(400, str(exc)) from None
-    return {
-        "tenant_id": tenant.id,
-        "approval_id": approval.id,
-        "status": tenant.status,
-        "path": approval.path,
-        "activation_fee_toman": activation_fee(approval.path),
-        "configured_activation_fee_toman": int(settings.activation_fee_toman),
-        "pasarguard_health": "verified",
-    }
+    return {"tenant_id": tenant.id, "approval_id": approval.id, "status": tenant.status, "path": approval.path, "activation_fee_toman": activation_fee(approval.path), "configured_activation_fee_toman": int(settings.activation_fee_toman), "pasarguard_health": "verified"}
 
 
 @r.post("/payments/{payment_id}/submit")
