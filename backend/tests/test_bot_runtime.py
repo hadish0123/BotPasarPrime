@@ -1,11 +1,6 @@
 import pytest
 
-from app.bot.runtime import (
-    BotRuntimeState,
-    TenantIsolationViolation if False else BotRuntimeState,
-    assert_transition,
-    transition_allowed,
-)
+from app.bot.runtime import assert_transition, transition_allowed
 from app.bot.tenant import TenantBotContract, TenantIsolationViolation, assert_tenant_access
 
 
