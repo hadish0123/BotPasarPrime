@@ -69,6 +69,40 @@ async def provision_service_for_order(db: AsyncSession, *, tenant_id: int, order
     return service
 
 
+async def renew_service(db: AsyncSession, *, tenant_id: int, service_id: int, duration_days: int, quota_gb: int | None = None) -> Service:
+    if duration_days < 1 or duration_days > 3650:
+        raise ValueError("invalid_duration_days")
+    service = await db.scalar(select(Service).where(Service.id == service_id, Service.tenant_id == tenant_id))
+    if service is None:
+        raise ValueError("service_not_found")
+    if service.status in {"revoked", "refunded"}:
+        raise ValueError("service_not_renewable")
+    if not service.external_id:
+        raise ValueError("service_external_id_missing")
+
+    now = datetime.now(UTC)
+    current_expiry = service.expires_at if service.expires_at and service.expires_at > now else now
+    new_expiry = current_expiry + timedelta(days=duration_days)
+    payload = {"expire": int(new_expiry.timestamp())}
+    if quota_gb is not None:
+        if quota_gb < 1:
+            raise ValueError("invalid_quota_gb")
+        payload["data_limit"] = quota_gb * 1024**3
+
+    client = PasarGuardClient(await _credentials(db, tenant_id), timeout_seconds=settings.pasarguard_timeout_seconds)
+    await client.update_user(service.external_id, payload)
+    service.status = "active"
+    service.expires_at = new_expiry
+    service.metadata_json = {
+        **(service.metadata_json or {}),
+        "last_renewed_at": now.isoformat(),
+        "last_renewal_days": duration_days,
+        **({"quota_gb": quota_gb} if quota_gb is not None else {}),
+    }
+    await db.flush()
+    return service
+
+
 async def revoke_service(db: AsyncSession, *, tenant_id: int, service_id: int) -> Service:
     service = await db.scalar(select(Service).where(Service.id == service_id, Service.tenant_id == tenant_id))
     if service is None:
