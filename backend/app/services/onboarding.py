@@ -13,6 +13,7 @@ from app.models.entities import (
     TenantBranding,
     TenantCredential,
     TenantSettings,
+    TenantUser,
     User,
 )
 from app.models.onboarding import OnboardingPayment
@@ -155,6 +156,14 @@ async def create_onboarding(
         )
     )
     db.add(TenantBranding(tenant_id=tenant.id, display_name=name))
+    db.add(
+        TenantUser(
+            tenant_id=tenant.id,
+            user_id=user.id,
+            status="pending",
+            role="tenant_owner",
+        )
+    )
 
     await _credential(db, tenant.id, "pasarguard_api_token", api_token)
     await _credential(db, tenant.id, "pasarguard_login_url", login_url)
