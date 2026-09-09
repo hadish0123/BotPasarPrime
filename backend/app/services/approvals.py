@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.entities import ApprovalRequest, AuditLog, BotInstance, Tenant, TenantUser
+from app.models.entities import ApprovalRequest, AuditLog, BotInstance, Notification, Tenant, TenantUser
 from app.models.onboarding import OnboardingPayment
 
 TRANSITIONS = {
@@ -45,9 +45,7 @@ async def review_approval(
 
     if approved and approval.path == "personal_panel":
         payment = await db.scalar(
-            select(OnboardingPayment).where(
-                OnboardingPayment.tenant_id == tenant.id,
-            )
+            select(OnboardingPayment).where(OnboardingPayment.tenant_id == tenant.id)
         )
         if payment is None or payment.status != "paid":
             raise ValueError("activation payment must be verified before approval")
@@ -63,9 +61,7 @@ async def review_approval(
     bot = await db.scalar(
         select(BotInstance).where(BotInstance.tenant_id == tenant.id)
     )
-    owner = await db.scalar(
-        select(TenantUser).where(TenantUser.tenant_id == tenant.id)
-    )
+    owner = await db.scalar(select(TenantUser).where(TenantUser.tenant_id == tenant.id))
 
     if approved:
         tenant.status = "approved"
@@ -79,6 +75,23 @@ async def review_approval(
             bot.status = "stopped"
         if owner:
             owner.status = "rejected"
+
+    if owner:
+        decision = "approved" if approved else "rejected"
+        db.add(
+            Notification(
+                tenant_id=tenant.id,
+                user_id=owner.user_id,
+                kind=f"tenant_{decision}",
+                title="فعال‌سازی Tenant تأیید شد" if approved else "درخواست Tenant رد شد",
+                body=(
+                    f"Tenant «{tenant.name}» توسط مالک پلتفرم تأیید و فعال می‌شود."
+                    if approved
+                    else f"درخواست Tenant «{tenant.name}» رد شد."
+                ),
+                idempotency_key=f"tenant-approval:{approval.id}:{decision}",
+            )
+        )
 
     db.add(
         AuditLog(
