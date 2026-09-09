@@ -10,7 +10,6 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 from app.core.config import settings
 from app.core.db import SessionLocal
 from app.models.entities import Plan, Product, Service, Tenant, User
-from app.services.tenant_activation import get_or_create_user
 
 
 class TenantBotSection(StrEnum):
@@ -116,21 +115,14 @@ async def _callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if data == TenantBotSection.STORE.value or data == TenantBotSection.PLANS.value:
         async with SessionLocal() as db:
-            rows = await db.execute(
-                select(Product, Plan)
-                .join(Plan, Plan.product_id == Product.id)
-                .where(Product.tenant_id == tenant_id, Product.active.is_(True), Plan.active.is_(True))
-                .order_by(Product.id, Plan.price)
-                .limit(30)
-            )
+            rows = await db.execute(select(Product, Plan).join(Plan, Plan.product_id == Product.id).where(Product.tenant_id == tenant_id, Product.active.is_(True), Plan.active.is_(True)).order_by(Product.id, Plan.price).limit(30))
             items = rows.all()
         if not items:
             await query.edit_message_text("🛍️ فعلاً محصول فعالی وجود ندارد.", reply_markup=user_menu())
             return
-        buttons = []
-        for product, plan in items:
-            buttons.append([InlineKeyboardButton(f"{product.name} — {plan.name} | {plan.price} تومان", callback_data=f"tenant:plan:{plan.id}")])
-        await query.edit_message_text("🛍️ محصولات و پلن‌های فعال:", reply_markup=InlineKeyboardMarkup(buttons + [[InlineKeyboardButton("🚀 خرید امن در Mini App", web_app=WebAppInfo(url=f"{settings.mini_app_url.rstrip('/')}?tenant_id={tenant_id}"))], [InlineKeyboardButton("⬅️ منو", callback_data="tenant:home")]]))
+        buttons = [[InlineKeyboardButton(f"{product.name} — {plan.name} | {plan.price} تومان", callback_data=f"tenant:plan:{plan.id}")] for product, plan in items]
+        buttons += [[InlineKeyboardButton("🚀 خرید امن در Mini App", web_app=WebAppInfo(url=f"{settings.mini_app_url.rstrip('/')}?tenant_id={tenant_id}"))], [InlineKeyboardButton("⬅️ منو", callback_data="tenant:home")]]
+        await query.edit_message_text("🛍️ محصولات و پلن‌های فعال:", reply_markup=InlineKeyboardMarkup(buttons))
         return
 
     if data.startswith("tenant:plan:"):
@@ -146,14 +138,10 @@ async def _callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if data == TenantBotSection.MY_SERVICES.value:
-        telegram_id = query.from_user.id
         async with SessionLocal() as db:
-            user = await db.scalar(select(User).where(User.telegram_id == telegram_id))
+            user = await db.scalar(select(User).where(User.telegram_id == query.from_user.id))
             services = [] if not user else list((await db.scalars(select(Service).where(Service.tenant_id == tenant_id, Service.user_id == user.id).order_by(Service.id.desc()).limit(20))).all())
-        if not services:
-            text = "🖥️ هنوز سرویسی ندارید."
-        else:
-            text = "🖥️ سرویس‌های من\n\n" + "\n".join(f"• #{s.id} — {s.status} — انقضا: {s.expires_at or '—'}" for s in services)
+        text = "🖥️ هنوز سرویسی ندارید." if not services else "🖥️ سرویس‌های من\n\n" + "\n".join(f"• #{s.id} — {s.status} — انقضا: {s.expires_at or '—'}" for s in services)
         await query.edit_message_text(text, reply_markup=user_menu())
         return
 
@@ -161,15 +149,8 @@ async def _callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.edit_message_text("🚀 مدیریت کامل خرید، پرداخت، کیف پول و سرویس‌ها در Mini App امن انجام می‌شود.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 باز کردن Mini App", web_app=WebAppInfo(url=f"{settings.mini_app_url.rstrip('/')}?tenant_id={tenant_id}"))], [InlineKeyboardButton("⬅️ منو", callback_data="tenant:home")]]))
         return
 
-    if data == TenantBotSection.MY_ORDERS.value:
-        telegram_id = query.from_user.id
-        async with SessionLocal() as db:
-            user = await db.scalar(select(User).where(User.telegram_id == telegram_id))
-            orders = [] if not user else await db.execute(select(Service).where(Service.tenant_id == tenant_id, Service.user_id == user.id).limit(20))
-        await query.edit_message_text("📋 سفارش‌ها در Mini App قابل مشاهده و پیگیری هستند.", reply_markup=user_menu())
-        return
-
     labels = {
+        TenantBotSection.MY_ORDERS.value: "📋 سفارش‌ها در Mini App قابل مشاهده و پیگیری هستند.",
         TenantBotSection.WALLET.value: "💰 کیف پول در Mini App نمایش داده می‌شود.",
         TenantBotSection.PAYMENTS.value: "💳 پرداخت امن از طریق Mini App انجام می‌شود.",
         TenantBotSection.RENEW.value: "🔄 تمدید سرویس از Mini App انجام می‌شود.",
