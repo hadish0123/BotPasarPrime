@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import re
+import socket
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,10 +27,25 @@ def normalize_slug(value: str) -> str:
     return value[:80]
 
 
-def validate_url(value: str) -> str:
+async def validate_url(value: str) -> str:
     value = value.strip().rstrip("/")
-    if not value.startswith(("https://", "http://")):
+    parsed = urlparse(value)
+    if parsed.scheme not in {"https", "http"} or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("invalid login url")
+    if settings.app_env.lower() in {"production", "prod"} and parsed.scheme != "https":
+        raise ValueError("PasarGuard URL must use HTTPS")
+    host = parsed.hostname.strip("[]").lower()
+    if host in {"localhost", "localhost.localdomain", "ip6-localhost"}:
+        raise ValueError("private PasarGuard host is not allowed")
+    try:
+        addresses = await asyncio.to_thread(socket.getaddrinfo, host, None, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError("PasarGuard host cannot be resolved") from exc
+    for item in addresses:
+        address = item[4][0]
+        parsed_ip = ipaddress.ip_address(address)
+        if parsed_ip.is_private or parsed_ip.is_loopback or parsed_ip.is_link_local or parsed_ip.is_reserved or parsed_ip.is_multicast or parsed_ip.is_unspecified:
+            raise ValueError("private PasarGuard host is not allowed")
     return value
 
 
@@ -61,7 +80,6 @@ async def create_onboarding(db: AsyncSession, *, telegram_id: int, username: str
     idempotency_key = idempotency_key.strip()
     if len(idempotency_key) < 8 or len(idempotency_key) > 120:
         raise ValueError("invalid idempotency key")
-
     existing_settings = await db.scalar(select(TenantSettings).where(TenantSettings.settings["onboarding_idempotency_key"].as_string() == idempotency_key))
     if existing_settings:
         tenant = await db.get(Tenant, existing_settings.tenant_id)
@@ -71,7 +89,7 @@ async def create_onboarding(db: AsyncSession, *, telegram_id: int, username: str
         return tenant, approval
 
     api_token = api_token.strip()
-    login_url = validate_url(login_url)
+    login_url = await validate_url(login_url)
     pasarguard_username = pasarguard_username.strip()
     bot_token = validate_bot_token(bot_token)
     bot_name = bot_name.strip()
