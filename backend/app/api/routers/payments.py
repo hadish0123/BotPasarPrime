@@ -21,7 +21,7 @@ async def _provision_paid_order(db: AsyncSession, tenant_id: int, order: Order):
     if item is None:
         raise ValueError("order_item_missing")
     try:
-        service = await provision_service_for_order(db, tenant_id=tenant_id, order_id=order.id, user_id=order.user_id, duration_days=item.snapshot_duration_days, quota_gb=item.snapshot_quota_gb)
+        service = await provision_service_for_order(db, tenant_id=tenant_id, order_id=order.id, user_id=order.user_id, plan_id=item.plan_id, duration_days=item.snapshot_duration_days, quota_gb=item.snapshot_quota_gb)
     except Exception:
         await db.commit()
         return None
