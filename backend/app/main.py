@@ -17,6 +17,7 @@ from app.api.routers.coupons import r as coupons_router
 from app.api.routers.health import r as health_router
 from app.api.routers.miniapp import r as miniapp_router
 from app.api.routers.notifications import r as notifications_router
+from app.api.routers.onboarding import r as onboarding_router
 from app.api.routers.orders import r as orders_router
 from app.api.routers.payments import r as payments_router
 from app.api.routers.products import r as products_router
@@ -39,7 +40,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault(
             "Permissions-Policy",
-            "camera=(), microphone=(), geolocation=()",
+            "camera=(), microphone=(), geolocation=(),
         )
         if settings.app_env.lower() in {"production", "prod"}:
             response.headers.setdefault(
@@ -102,6 +103,7 @@ async def current_user(claims=Depends(bearer)):
 for router in (
     health_router,
     auth_router,
+    onboarding_router,
     tenants_router,
     products_router,
     orders_router,
