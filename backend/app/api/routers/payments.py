@@ -7,111 +7,58 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import bearer, require_permission, require_tenant_match
 from app.api.schemas import PaymentCreate
 from app.core.db import get_db
-from app.models.entities import Order
+from app.models.entities import Order, OrderItem, Service
 from app.services.audit import audit_sensitive
 from app.services.payments import create_payment, get_payment, transition
+from app.services.provisioning import provision_service_for_order
 
 r = APIRouter(prefix="/payments", tags=["payments"])
 
 
 @r.post("")
-async def create(
-    x: PaymentCreate,
-    tenant_id: int,
-    claims=Depends(bearer),
-    db: AsyncSession = Depends(get_db),
-):
+async def create(x: PaymentCreate, tenant_id: int, claims=Depends(bearer), db: AsyncSession = Depends(get_db)):
     require_tenant_match(tenant_id, claims)
     user_id = claims.get("user_id") or claims.get("sub")
-    order = await db.scalar(
-        select(Order).where(
-            Order.id == x.order_id,
-            Order.tenant_id == tenant_id,
-            Order.user_id == int(user_id) if user_id else False,
-        )
-    )
+    order = await db.scalar(select(Order).where(Order.id == x.order_id, Order.tenant_id == tenant_id, Order.user_id == int(user_id) if user_id else False))
     if not order:
         raise HTTPException(404, "order_not_found")
     if order.status in {"paid", "completed", "cancelled"}:
         raise HTTPException(409, "order_not_payable")
     if x.amount != order.total:
         raise HTTPException(400, "payment_amount_mismatch")
-
     try:
-        payment = await create_payment(
-            db=db,
-            tenant_id=tenant_id,
-            order_id=x.order_id,
-            amount=x.amount,
-            provider=x.provider,
-            key=x.idempotency_key,
-        )
+        payment = await create_payment(db=db, tenant_id=tenant_id, order_id=x.order_id, amount=x.amount, provider=x.provider, key=x.idempotency_key)
         if payment.status == "created":
             payment.status = "awaiting_payment"
         await db.commit()
-        return {
-            "id": payment.id,
-            "order_id": payment.order_id,
-            "status": payment.status,
-            "provider": payment.provider,
-        }
+        return {"id": payment.id, "order_id": payment.order_id, "status": payment.status, "provider": payment.provider}
     except ValueError as exc:
         await db.rollback()
         raise HTTPException(400, str(exc)) from None
 
 
 @r.get("/{payment_id}")
-async def read_payment(
-    payment_id: int,
-    tenant_id: int,
-    claims=Depends(bearer),
-    db: AsyncSession = Depends(get_db),
-):
+async def read_payment(payment_id: int, tenant_id: int, claims=Depends(bearer), db: AsyncSession = Depends(get_db)):
     require_tenant_match(tenant_id, claims)
-    payment = await get_payment(
-        db=db,
-        tenant_id=tenant_id,
-        payment_id=payment_id,
-    )
+    payment = await get_payment(db=db, tenant_id=tenant_id, payment_id=payment_id)
     if not payment:
         raise HTTPException(404, "payment_not_found")
     order = await db.get(Order, payment.order_id)
     user_id = claims.get("user_id") or claims.get("sub")
-    if not claims.get("is_platform_owner") and (
-        not order or order.user_id != int(user_id)
-    ):
+    if not claims.get("is_platform_owner") and (not order or order.user_id != int(user_id)):
         raise HTTPException(403, "forbidden")
-    return {
-        "id": payment.id,
-        "order_id": payment.order_id,
-        "amount": str(payment.amount),
-        "provider": payment.provider,
-        "status": payment.status,
-        "reference": payment.reference,
-    }
+    return {"id": payment.id, "order_id": payment.order_id, "amount": str(payment.amount), "provider": payment.provider, "status": payment.status, "reference": payment.reference}
 
 
 @r.post("/{payment_id}/submit")
-async def submit_payment(
-    payment_id: int,
-    tenant_id: int,
-    reference: str,
-    claims=Depends(bearer),
-    db: AsyncSession = Depends(get_db),
-):
+async def submit_payment(payment_id: int, tenant_id: int, reference: str, claims=Depends(bearer), db: AsyncSession = Depends(get_db)):
     require_tenant_match(tenant_id, claims)
-    payment = await get_payment(
-        db=db,
-        tenant_id=tenant_id,
-        payment_id=payment_id,
-    )
+    payment = await get_payment(db=db, tenant_id=tenant_id, payment_id=payment_id)
     if not payment:
         raise HTTPException(404, "payment_not_found")
     order = await db.get(Order, payment.order_id)
     user_id = claims.get("user_id") or claims.get("sub")
-    if not claims.get("is_platform_owner") and (
-        not order or order.user_id != int(user_id)
-    ):
+    if not claims.get("is_platform_owner") and (not order or order.user_id != int(user_id)):
         raise HTTPException(403, "forbidden")
     if not reference or len(reference.strip()) > 150:
         raise HTTPException(400, "invalid_reference")
@@ -126,19 +73,9 @@ async def submit_payment(
 
 
 @r.post("/{payment_id}/verify")
-async def verify_payment(
-    payment_id: int,
-    tenant_id: int,
-    approve: bool = True,
-    claims=Depends(require_permission("payments.verify")),
-    db: AsyncSession = Depends(get_db),
-):
+async def verify_payment(payment_id: int, tenant_id: int, approve: bool = True, claims=Depends(require_permission("payments.verify")), db: AsyncSession = Depends(get_db)):
     require_tenant_match(tenant_id, claims)
-    payment = await get_payment(
-        db=db,
-        tenant_id=tenant_id,
-        payment_id=payment_id,
-    )
+    payment = await get_payment(db=db, tenant_id=tenant_id, payment_id=payment_id)
     if not payment:
         raise HTTPException(404, "payment_not_found")
     order = await db.get(Order, payment.order_id)
@@ -154,24 +91,29 @@ async def verify_payment(
         else:
             transition(payment, "rejected")
             action = "payment.reject"
-
-        audit_sensitive(
-            db,
-            action=action,
-            tenant_id=tenant_id,
-            actor_type="admin",
-            actor_id=claims.get("user_id") or claims.get("sub"),
-            target_type="payment",
-            target_id=payment.id,
-            metadata={"order_id": order.id, "status": payment.status},
-        )
+        audit_sensitive(db, action=action, tenant_id=tenant_id, actor_type="admin", actor_id=claims.get("user_id") or claims.get("sub"), target_type="payment", target_id=payment.id, metadata={"order_id": order.id, "status": payment.status})
         await db.commit()
     except ValueError as exc:
         await db.rollback()
         raise HTTPException(409, str(exc)) from None
 
-    return {
-        "id": payment.id,
-        "order_id": order.id,
-        "status": payment.status,
-    }
+    service = None
+    if approve:
+        item = await db.scalar(select(OrderItem).where(OrderItem.order_id == order.id).order_by(OrderItem.id))
+        if item is None:
+            raise HTTPException(500, "order_item_missing")
+        try:
+            service = await provision_service_for_order(
+                db,
+                tenant_id=tenant_id,
+                order_id=order.id,
+                user_id=order.user_id,
+                duration_days=item.snapshot_duration_days,
+                quota_gb=item.snapshot_quota_gb,
+            )
+        except Exception:
+            await db.commit()
+        else:
+            await db.commit()
+
+    return {"id": payment.id, "order_id": order.id, "status": payment.status, "service_id": service.id if service else None, "service_status": service.status if service else ("provisioning_failed" if approve else None)}
