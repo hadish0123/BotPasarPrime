@@ -9,6 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.deps import bearer
 from app.api.routers.admin import r as admin_router
+from app.api.routers.admins import r as admins_router
 from app.api.routers.approvals import r as approvals_router
 from app.api.routers.audit import r as audit_router
 from app.api.routers.auth import r as auth_router
@@ -80,5 +81,5 @@ async def current_user(claims=Depends(bearer)):
     return {"user_id": claims.get("user_id") or claims.get("sub"), "telegram_id": claims.get("telegram_id"), "username": claims.get("username"), "tenant_id": claims.get("tenant_id"), "role": claims.get("role"), "permissions": claims.get("permissions", []), "is_platform_owner": bool(claims.get("is_platform_owner"))}
 
 
-for router in (health_router, auth_router, onboarding_router, tenants_router, products_router, orders_router, payments_router, wallet_router, coupons_router, tickets_router, admin_router, approvals_router, audit_router, bots_router, miniapp_router, referrals_router, users_router, settings_router, notifications_router, reports_router, services_router):
+for router in (health_router, auth_router, onboarding_router, tenants_router, products_router, orders_router, payments_router, wallet_router, coupons_router, tickets_router, admin_router, admins_router, approvals_router, audit_router, bots_router, miniapp_router, referrals_router, users_router, settings_router, notifications_router, reports_router, services_router):
     app.include_router(router, prefix="/api/v1")
