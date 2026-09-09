@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import require_permission
 from app.api.schemas import ApprovalAction
 from app.core.db import get_db
-from app.models.entities import ApprovalRequest, Tenant
+from app.models.entities import ApprovalRequest, Tenant, TenantSettings
 from app.models.onboarding import OnboardingPayment
 from app.services.approvals import review_approval
 
@@ -38,6 +38,60 @@ async def list_approvals(
         }
         for item in result.scalars().all()
     ]
+
+
+@r.get("/onboarding-payments/pending")
+async def pending_onboarding_payments(
+    claims=Depends(require_permission("payments.verify")),
+    db: AsyncSession = Depends(get_db),
+):
+    if not claims.get("is_platform_owner"):
+        raise HTTPException(403, "only platform owner can list onboarding payments")
+    result = await db.execute(
+        select(OnboardingPayment)
+        .where(OnboardingPayment.status.in_(["submitted", "verifying"]))
+        .order_by(OnboardingPayment.created_at.asc())
+    )
+    return [
+        {
+            "id": item.id,
+            "tenant_id": item.tenant_id,
+            "user_id": item.user_id,
+            "amount": str(item.amount),
+            "status": item.status,
+            "reference": item.reference,
+            "created_at": item.created_at,
+        }
+        for item in result.scalars().all()
+    ]
+
+
+@r.post("/onboarding-payments/{payment_id}/verify")
+async def verify_onboarding_payment(
+    payment_id: int,
+    approve: bool = True,
+    claims=Depends(require_permission("payments.verify")),
+    db: AsyncSession = Depends(get_db),
+):
+    if not claims.get("is_platform_owner"):
+        raise HTTPException(403, "only platform owner can verify onboarding payments")
+    payment = await db.get(OnboardingPayment, payment_id)
+    if payment is None:
+        raise HTTPException(404, "onboarding payment not found")
+    if payment.status != "submitted":
+        raise HTTPException(409, "onboarding payment is not awaiting verification")
+    payment.status = "paid" if approve else "rejected"
+    if approve:
+        settings_row = await db.scalar(
+            select(TenantSettings).where(TenantSettings.tenant_id == payment.tenant_id)
+        )
+        if settings_row:
+            settings_row.settings = {
+                **(settings_row.settings or {}),
+                "payment_status": "paid",
+            }
+    await db.commit()
+    return {"id": payment.id, "status": payment.status, "tenant_id": payment.tenant_id}
 
 
 @r.get("/{approval_id}")
@@ -91,60 +145,3 @@ async def act(
         await db.rollback()
         raise HTTPException(400, str(exc)) from None
     return {"id": approval.id, "status": approval.status, "tenant_id": approval.tenant_id}
-
-
-@r.get("/onboarding-payments/pending")
-async def pending_onboarding_payments(
-    claims=Depends(require_permission("payments.verify")),
-    db: AsyncSession = Depends(get_db),
-):
-    if not claims.get("is_platform_owner"):
-        raise HTTPException(403, "only platform owner can list onboarding payments")
-    result = await db.execute(
-        select(OnboardingPayment)
-        .where(OnboardingPayment.status.in_(["submitted", "verifying"]))
-        .order_by(OnboardingPayment.created_at.asc())
-    )
-    return [
-        {
-            "id": item.id,
-            "tenant_id": item.tenant_id,
-            "user_id": item.user_id,
-            "amount": str(item.amount),
-            "status": item.status,
-            "reference": item.reference,
-            "created_at": item.created_at,
-        }
-        for item in result.scalars().all()
-    ]
-
-
-@r.post("/onboarding-payments/{payment_id}/verify")
-async def verify_onboarding_payment(
-    payment_id: int,
-    approve: bool = True,
-    claims=Depends(require_permission("payments.verify")),
-    db: AsyncSession = Depends(get_db),
-):
-    if not claims.get("is_platform_owner"):
-        raise HTTPException(403, "only platform owner can verify onboarding payments")
-    payment = await db.get(OnboardingPayment, payment_id)
-    if payment is None:
-        raise HTTPException(404, "onboarding payment not found")
-    if payment.status != "submitted":
-        raise HTTPException(409, "onboarding payment is not awaiting verification")
-    payment.status = "paid" if approve else "rejected"
-    if approve:
-        tenant = await db.get(Tenant, payment.tenant_id)
-        if tenant:
-            from app.models.entities import TenantSettings
-            settings_row = await db.scalar(
-                select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
-            )
-            if settings_row:
-                settings_row.settings = {
-                    **(settings_row.settings or {}),
-                    "payment_status": "paid",
-                }
-    await db.commit()
-    return {"id": payment.id, "status": payment.status, "tenant_id": payment.tenant_id}
