@@ -46,13 +46,11 @@ async def provision_service_for_order(db: AsyncSession, *, tenant_id: int, order
     else:
         service.status = "provisioning"
         service.metadata_json = {**(service.metadata_json or {}), **metadata}
-
     user = await db.get(User, user_id)
     if user is None:
         service.status = "failed"
         await db.flush()
         raise ValueError("service user not found")
-
     client = PasarGuardClient(await _credentials(db, tenant_id), timeout_seconds=settings.pasarguard_timeout_seconds)
     remote_username = _username(user, order_id)
     payload = {"username": remote_username, "password": _password(), "data_limit": quota_gb * 1024**3 if quota_gb is not None else None, "expire": int((datetime.now(UTC) + timedelta(days=duration_days)).timestamp())}
@@ -62,11 +60,26 @@ async def provision_service_for_order(db: AsyncSession, *, tenant_id: int, order
         service.status = "failed"
         await db.flush()
         raise
-
     external_id = response.get("id") or response.get("username") or response.get("user_id") if isinstance(response, dict) else None
     service.external_id = str(external_id or remote_username)
     service.status = "active"
     service.expires_at = datetime.now(UTC) + timedelta(days=duration_days)
     service.metadata_json = {**(service.metadata_json or {}), "external_username": remote_username}
+    await db.flush()
+    return service
+
+
+async def revoke_service(db: AsyncSession, *, tenant_id: int, service_id: int) -> Service:
+    service = await db.scalar(select(Service).where(Service.id == service_id, Service.tenant_id == tenant_id))
+    if service is None:
+        raise ValueError("service_not_found")
+    if service.status in {"revoked", "refunded", "expired"}:
+        return service
+    if not service.external_id:
+        raise ValueError("service_external_id_missing")
+    client = PasarGuardClient(await _credentials(db, tenant_id), timeout_seconds=settings.pasarguard_timeout_seconds)
+    await client.delete_user(service.external_id)
+    service.status = "revoked"
+    service.metadata_json = {**(service.metadata_json or {}), "revoked_at": datetime.now(UTC).isoformat()}
     await db.flush()
     return service
