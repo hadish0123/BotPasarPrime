@@ -73,34 +73,29 @@ class TenantUser(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"))
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    status: Mapped[str] = mapped_column(String(30), default="active")
-    role: Mapped[str] = mapped_column(String(30), default="customer")
+    status: Mapped[str] = mapped_column(String(30), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     __table_args__ = (UniqueConstraint("tenant_id", "user_id"),)
 
 
 class Admin(Base):
     __tablename__ = "admins"
     id: Mapped[int] = mapped_column(primary_key=True)
-    telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True)
-    username: Mapped[str | None] = mapped_column(String(100))
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class Role(Base):
     __tablename__ = "roles"
     id: Mapped[int] = mapped_column(primary_key=True)
-    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
-    name: Mapped[str] = mapped_column(String(50), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
+    name: Mapped[str] = mapped_column(String(50), unique=True)
+    description: Mapped[str | None] = mapped_column(String(255))
 
 
 class Permission(Base):
     __tablename__ = "permissions"
     id: Mapped[int] = mapped_column(primary_key=True)
-    key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    key: Mapped[str] = mapped_column(String(100), unique=True)
 
 
 class AdminRole(Base):
@@ -108,7 +103,7 @@ class AdminRole(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     admin_id: Mapped[int] = mapped_column(ForeignKey("admins.id", ondelete="CASCADE"))
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id", ondelete="CASCADE"))
-    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"))
+    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True)
     __table_args__ = (UniqueConstraint("admin_id", "role_id", "tenant_id"),)
 
 
@@ -126,8 +121,8 @@ class Product(Base):
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     name: Mapped[str] = mapped_column(String(150))
     description: Mapped[str | None] = mapped_column(Text)
-    active: Mapped[bool] = mapped_column(Boolean, default=True)
     category: Mapped[str | None] = mapped_column(String(100))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     __table_args__ = (Index("ix_products_tenant_active", "tenant_id", "active"),)
 
@@ -139,10 +134,10 @@ class Plan(Base):
     name: Mapped[str] = mapped_column(String(120))
     price: Mapped[Decimal] = mapped_column(Numeric(18, 2))
     duration_days: Mapped[int] = mapped_column(Integer)
-    quota_gb: Mapped[int | None] = mapped_column(Integer)
+    quota_gb: Mapped[int | None] = mapped_column(Integer, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    discount_kind: Mapped[str | None] = mapped_column(String(30), nullable=True)
-    discount_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    discount_kind: Mapped[str] = mapped_column(String(20), default="none")
+    discount_value: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0)
 
 
 class Order(Base):
@@ -238,6 +233,7 @@ class Referral(Base):
     inviter_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     invited_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     code: Mapped[str] = mapped_column(String(60))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     __table_args__ = (UniqueConstraint("tenant_id", "invited_user_id"), UniqueConstraint("tenant_id", "code"))
 
 
