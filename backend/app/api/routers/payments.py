@@ -25,19 +25,15 @@ async def _provision_paid_order(db: AsyncSession, tenant_id: int, order: Order):
     )
     if item is None:
         raise ValueError("order_item_missing")
-    try:
-        service = await provision_service_for_order(
-            db,
-            tenant_id=tenant_id,
-            order_id=order.id,
-            user_id=order.user_id,
-            plan_id=item.plan_id,
-            duration_days=item.snapshot_duration_days,
-            quota_gb=item.snapshot_quota_gb,
-        )
-    except (ValueError, RuntimeError):
-        await db.commit()
-        return None
+    service = await provision_service_for_order(
+        db,
+        tenant_id=tenant_id,
+        order_id=order.id,
+        user_id=order.user_id,
+        plan_id=item.plan_id,
+        duration_days=item.snapshot_duration_days,
+        quota_gb=item.snapshot_quota_gb,
+    )
     await db.commit()
     return service
 
@@ -78,11 +74,13 @@ async def create(
 ):
     require_tenant_match(tenant_id, claims)
     user_id = claims.get("user_id") or claims.get("sub")
+    if not user_id:
+        raise HTTPException(401, "user_identity_required")
     order = await db.scalar(
         select(Order).where(
             Order.id == x.order_id,
             Order.tenant_id == tenant_id,
-            Order.user_id == int(user_id) if user_id else False,
+            Order.user_id == int(user_id),
         )
     )
     if not order:
@@ -126,7 +124,7 @@ async def create(
                 metadata={"order_id": order.id, "amount": str(payment.amount)},
             )
         elif payment.status == "created":
-            payment.status = "awaiting_payment"
+            transition(payment, "awaiting_payment")
         await db.commit()
     except ValueError as exc:
         await db.rollback()
@@ -167,7 +165,7 @@ async def read_payment(
     order = await db.get(Order, payment.order_id)
     user_id = claims.get("user_id") or claims.get("sub")
     if not claims.get("is_platform_owner") and (
-        not order or order.user_id != int(user_id)
+        not order or not user_id or order.user_id != int(user_id)
     ):
         raise HTTPException(403, "forbidden")
     return {
@@ -194,9 +192,7 @@ async def submit_payment(
         raise HTTPException(404, "payment_not_found")
     order = await db.get(Order, payment.order_id)
     user_id = claims.get("user_id") or claims.get("sub")
-    if not claims.get("is_platform_owner") and (
-        not order or order.user_id != int(user_id)
-    ):
+    if not order or not user_id or order.user_id != int(user_id):
         raise HTTPException(403, "forbidden")
     if not reference or len(reference.strip()) > 150:
         raise HTTPException(400, "invalid_reference")
@@ -260,13 +256,88 @@ async def verify_payment(
             )
         except ValueError:
             pass
-        service = await _provision_paid_order(db, tenant_id, order)
+        try:
+            service = await _provision_paid_order(db, tenant_id, order)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(502, f"provisioning_failed:{exc}") from None
     return {
         "id": payment.id,
         "order_id": order.id,
         "status": payment.status,
         "service_id": service.id if service else None,
-        "service_status": (
-            service.status if service else ("provisioning_failed" if approve else None)
-        ),
+        "service_status": service.status if service else None,
     }
+
+
+@r.post("/{payment_id}/expire")
+async def expire_payment(
+    payment_id: int,
+    tenant_id: int,
+    claims=Depends(require_permission("payments.verify")),
+    db: AsyncSession = Depends(get_db),
+):
+    require_tenant_match(tenant_id, claims)
+    payment = await get_payment(db=db, tenant_id=tenant_id, payment_id=payment_id)
+    if not payment:
+        raise HTTPException(404, "payment_not_found")
+    try:
+        transition(payment, "expired")
+        audit_sensitive(
+            db,
+            action="payment.expire",
+            tenant_id=tenant_id,
+            actor_type="admin",
+            actor_id=claims.get("user_id") or claims.get("sub"),
+            target_type="payment",
+            target_id=payment.id,
+            metadata={"order_id": payment.order_id},
+        )
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(409, str(exc)) from None
+    return {"id": payment.id, "status": payment.status}
+
+
+@r.post("/{payment_id}/refund")
+async def refund_payment(
+    payment_id: int,
+    tenant_id: int,
+    claims=Depends(require_permission("payments.refund")),
+    db: AsyncSession = Depends(get_db),
+):
+    require_tenant_match(tenant_id, claims)
+    payment = await get_payment(db=db, tenant_id=tenant_id, payment_id=payment_id)
+    if not payment:
+        raise HTTPException(404, "payment_not_found")
+    order = await db.get(Order, payment.order_id)
+    if not order or order.tenant_id != tenant_id:
+        raise HTTPException(404, "order_not_found")
+    try:
+        transition(payment, "refunded")
+        order.status = "refunded"
+        if payment.provider == "wallet":
+            await post_wallet_transaction(
+                db,
+                tenant_id=tenant_id,
+                user_id=order.user_id,
+                amount=payment.amount,
+                direction="credit",
+                reason=f"refund:{order.id}",
+                idempotency_key=f"wallet-refund:{payment.id}",
+            )
+        audit_sensitive(
+            db,
+            action="payment.refund",
+            tenant_id=tenant_id,
+            actor_type="admin",
+            actor_id=claims.get("user_id") or claims.get("sub"),
+            target_type="payment",
+            target_id=payment.id,
+            metadata={"order_id": order.id, "amount": str(payment.amount)},
+        )
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(409, str(exc)) from None
+    return {"id": payment.id, "order_id": order.id, "status": payment.status}
