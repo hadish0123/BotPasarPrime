@@ -101,9 +101,7 @@ class BotRuntime:
             bot = await db.get(BotInstance, bot_id)
             if bot is None:
                 return
-
             current = bot.status
-
             try:
                 assert_transition(current, target)
             except ValueError:
@@ -114,24 +112,18 @@ class BotRuntime:
                     target,
                 )
                 return
-
             bot.status = target
-
             if target == BotRuntimeState.RUNNING:
                 bot.heartbeat_at = utc_now()
-
             if increment_error:
                 bot.error_count = int(bot.error_count or 0) + 1
-
             await db.commit()
 
     async def _mark_heartbeat(self, bot_id: int) -> None:
         async with SessionLocal() as db:
             bot = await db.get(BotInstance, bot_id)
-
             if bot is None:
                 return
-
             if bot.status == BotRuntimeState.RUNNING:
                 bot.heartbeat_at = utc_now()
                 await db.commit()
@@ -142,115 +134,72 @@ class BotRuntime:
                 await asyncio.sleep(30)
                 if bot_id not in self.instances:
                     return
-
                 await self._mark_heartbeat(bot_id)
-
             except asyncio.CancelledError:
                 return
-
             except Exception:
-                log.exception(
-                    "heartbeat failure bot=%s",
-                    bot_id,
-                )
+                log.exception("heartbeat failure bot=%s", bot_id)
 
     async def start_bot(self, bot: BotInstance) -> None:
         if bot.tenant_id is None:
             raise ValueError(f"tenant bot {bot.id} has no tenant_id")
-
         async with self.lock:
             if bot.id in self.instances:
                 return
-
             if bot.status not in {
                 BotRuntimeState.APPROVED,
+                BotRuntimeState.RUNNING,
                 BotRuntimeState.STOPPED,
                 BotRuntimeState.FAILED,
             }:
                 raise ValueError(f"bot cannot start from state: {bot.status}")
-
-            await self._set_state(
-                bot.id,
-                BotRuntimeState.STARTING,
-            )
-
+            if bot.status == BotRuntimeState.RUNNING:
+                bot.status = BotRuntimeState.STOPPED
+            await self._set_state(bot.id, BotRuntimeState.STARTING)
             application: Application | None = None
-
             try:
                 token = box.decrypt(bot.encrypted_token)
-
                 from app.bot.tenant import build_tenant_application
-
                 application = build_tenant_application(
                     token=token,
                     tenant_id=int(bot.tenant_id),
                     bot_instance_id=int(bot.id),
                 )
-
                 await application.initialize()
                 await application.start()
-
                 if application.updater is None:
                     raise RuntimeError("tenant bot updater is unavailable")
-
                 await application.updater.start_polling(
                     allowed_updates=Update.ALL_TYPES,
                     drop_pending_updates=True,
                 )
-
                 self.instances[bot.id] = application
-
-                task = asyncio.create_task(
+                self.tasks[bot.id] = asyncio.create_task(
                     self._heartbeat_loop(bot.id),
                     name=f"3xshop-bot-heartbeat-{bot.id}",
                 )
-
-                self.tasks[bot.id] = task
-
-                await self._set_state(
-                    bot.id,
-                    BotRuntimeState.RUNNING,
-                )
-
+                await self._set_state(bot.id, BotRuntimeState.RUNNING)
                 log.info(
                     "tenant bot started bot_id=%s tenant_id=%s",
                     bot.id,
                     bot.tenant_id,
                 )
-
             except Exception:
                 if application is not None:
                     try:
                         if application.updater and application.updater.running:
                             await application.updater.stop()
                     except Exception:
-                        log.exception(
-                            "tenant bot updater cleanup failed bot=%s",
-                            bot.id,
-                        )
-
+                        log.exception("tenant bot updater cleanup failed bot=%s", bot.id)
                     try:
                         await application.stop()
                     except Exception:
-                        log.exception(
-                            "tenant bot stop cleanup failed bot=%s",
-                            bot.id,
-                        )
-
+                        log.exception("tenant bot stop cleanup failed bot=%s", bot.id)
                     try:
                         await application.shutdown()
                     except Exception:
-                        log.exception(
-                            "tenant bot shutdown cleanup failed bot=%s",
-                            bot.id,
-                        )
-
-                await self._set_state(
-                    bot.id,
-                    BotRuntimeState.FAILED,
-                    increment_error=True,
-                )
-
+                        log.exception("tenant bot shutdown cleanup failed bot=%s", bot.id)
+                await self._set_state(bot.id, BotRuntimeState.FAILED, increment_error=True)
                 raise
 
     async def stop_bot(
@@ -261,42 +210,26 @@ class BotRuntime:
     ) -> None:
         async with self.lock:
             application = self.instances.get(bot_id)
-
             async with SessionLocal() as db:
                 bot = await db.get(BotInstance, bot_id)
-
                 if bot is None:
                     raise ValueError("bot not found")
-
                 if expected_tenant_id is not None and bot.tenant_id != expected_tenant_id:
                     raise PermissionError("cross-tenant bot control blocked")
-
             if application is None:
-                await self._set_state(
-                    bot_id,
-                    BotRuntimeState.STOPPED,
-                )
+                await self._set_state(bot_id, BotRuntimeState.STOPPED)
                 return
-
             self.instances.pop(bot_id, None)
-
             task = self.tasks.pop(bot_id, None)
-
             if task is not None:
                 task.cancel()
-
             try:
                 if application.updater and application.updater.running:
                     await application.updater.stop()
-
                 await application.stop()
                 await application.shutdown()
-
             finally:
-                await self._set_state(
-                    bot_id,
-                    BotRuntimeState.STOPPED,
-                )
+                await self._set_state(bot_id, BotRuntimeState.STOPPED)
 
     async def suspend_bot(
         self,
@@ -306,60 +239,37 @@ class BotRuntime:
     ) -> None:
         async with SessionLocal() as db:
             bot = await db.get(BotInstance, bot_id)
-
             if bot is None:
                 raise ValueError("bot not found")
-
             if expected_tenant_id is not None and bot.tenant_id != expected_tenant_id:
                 raise PermissionError("cross-tenant bot control blocked")
-
-        await self.stop_bot(
-            bot_id,
-            expected_tenant_id=expected_tenant_id,
-        )
-
-        await self._set_state(
-            bot_id,
-            BotRuntimeState.SUSPENDED,
-        )
+        await self.stop_bot(bot_id, expected_tenant_id=expected_tenant_id)
+        await self._set_state(bot_id, BotRuntimeState.SUSPENDED)
 
     async def start_approved_bots(self) -> None:
         async with SessionLocal() as db:
             result = await db.execute(
                 select(BotInstance).where(
                     BotInstance.status.in_(
-                        [
-                            BotRuntimeState.APPROVED,
-                            BotRuntimeState.RUNNING,
-                        ]
+                        [BotRuntimeState.APPROVED, BotRuntimeState.RUNNING]
                     )
                 )
             )
-
             bots = list(result.scalars().all())
-
         for bot in bots:
             if bot.id in self.instances:
                 continue
-
             try:
                 await self.start_bot(bot)
-
             except Exception:
-                log.exception(
-                    "failed to restore tenant bot bot=%s",
-                    bot.id,
-                )
+                log.exception("failed to restore tenant bot bot=%s", bot.id)
 
     async def shutdown_all(self) -> None:
         for bot_id in list(self.instances.keys()):
             try:
                 await self.stop_bot(bot_id)
             except Exception:
-                log.exception(
-                    "failed to stop bot during runtime shutdown bot=%s",
-                    bot_id,
-                )
+                log.exception("failed to stop bot during runtime shutdown bot=%s", bot_id)
 
     def health(
         self,
@@ -368,16 +278,13 @@ class BotRuntime:
         expected_tenant_id: int | None = None,
     ) -> dict[str, Any]:
         application = self.instances.get(bot_id)
-
-        # Runtime memory is never trusted for tenant ownership.
-        # Ownership is checked by the API/database before calling this method.
-        running = application is not None
-
         return {
             "id": bot_id,
-            "running": running,
+            "running": application is not None,
             "runtime_status": (
-                BotRuntimeState.RUNNING.value if running else BotRuntimeState.STOPPED.value
+                BotRuntimeState.RUNNING.value
+                if application is not None
+                else BotRuntimeState.STOPPED.value
             ),
         }
 
