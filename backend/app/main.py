@@ -40,7 +40,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault(
             "Permissions-Policy",
-            "camera=(), microphone=(), geolocation=(),
+            "camera=(), microphone=(), geolocation=(),",
         )
         if settings.app_env.lower() in {"production", "prod"}:
             response.headers.setdefault(
