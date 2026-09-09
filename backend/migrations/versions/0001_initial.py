@@ -1,13 +1,13 @@
 """3XSHOP initial schema.
 
-The initial migration creates the complete ORM schema from a clean database.
-Later migrations only add indexes or compatibility structures.
+The initial migration creates the complete canonical ORM entity schema from a
+clean database. Dedicated feature migrations own tables introduced later so
+fresh installs and upgrades follow the same deterministic revision chain.
 """
 
 from alembic import op
 
 from app.models.entities import Base
-from app.models.onboarding import OnboardingPayment  # noqa: F401
 
 revision = "0001_initial"
 down_revision = None
