@@ -14,7 +14,7 @@ class TenantCreate(StrictModel):
 
 
 class OnboardingCreate(StrictModel):
-    slug: str = Field(min_length=2, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    slug: str = Field(min_length=2, max_length=80, pattern=r"^(?!$).+")
     name: str = Field(min_length=2, max_length=150)
     path: str = Field(pattern=r"^(representative|primevpn_representative|personal_panel)$")
     pasarguard_url: str = Field(min_length=8, max_length=500)
@@ -89,6 +89,10 @@ class CouponCalc(StrictModel):
 
 class TicketCreate(StrictModel):
     subject: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=10000)
+
+
+class TicketReply(StrictModel):
     body: str = Field(min_length=1, max_length=10000)
 
 
