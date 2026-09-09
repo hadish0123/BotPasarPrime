@@ -59,6 +59,8 @@ class Settings(BaseSettings):
             origins = [item.strip() for item in self.cors_origins.split(",") if item.strip()]
             if not origins or "*" in origins:
                 raise RuntimeError("Production CORS_ORIGINS must contain explicit origins")
+            if self.central_bot_enabled and not self.mini_app_url.startswith("https://"):
+                raise RuntimeError("MINI_APP_URL must be an HTTPS URL when the central bot is enabled")
 
 
 settings = Settings()
