@@ -12,6 +12,33 @@ from app.models.entities import Notification, Service
 log = logging.getLogger("3xshop.scheduler")
 
 
+async def _add_notification(
+    db,
+    *,
+    service: Service,
+    kind: str,
+    title: str,
+    body: str,
+    idempotency_key: str,
+) -> bool:
+    existing = await db.scalar(
+        select(Notification.id).where(Notification.idempotency_key == idempotency_key)
+    )
+    if existing is not None:
+        return False
+    db.add(
+        Notification(
+            tenant_id=service.tenant_id,
+            user_id=service.user_id,
+            kind=kind,
+            title=title,
+            body=body,
+            idempotency_key=idempotency_key,
+        )
+    )
+    return True
+
+
 async def process_expiries() -> None:
     now = datetime.now(UTC)
     warning_limit = now + timedelta(days=3)
@@ -34,36 +61,33 @@ async def process_expiries() -> None:
                 and service.status == "active"
             ):
                 service.status = "expired"
-                if not metadata.get("expiry_notified"):
-                    db.add(
-                        Notification(
-                            tenant_id=service.tenant_id,
-                            user_id=service.user_id,
-                            kind="service_expired",
-                            title="سرویس منقضی شد",
-                            body=f"سرویس #{service.id} منقضی شده است.",
-                        )
-                    )
-                    metadata["expiry_notified"] = True
+                added = await _add_notification(
+                    db,
+                    service=service,
+                    kind="service_expired",
+                    title="سرویس منقضی شد",
+                    body=f"سرویس #{service.id} منقضی شده است.",
+                    idempotency_key=f"service-expired:{service.id}",
+                )
+                metadata["expiry_notified"] = True
+                changed = changed or added or service.status == "expired"
                 service.metadata_json = metadata
-                changed = True
             elif (
                 service.expires_at
                 and service.expires_at <= warning_limit
                 and not metadata.get("expiry_warning_sent")
             ):
-                db.add(
-                    Notification(
-                        tenant_id=service.tenant_id,
-                        user_id=service.user_id,
-                        kind="service_expiry_warning",
-                        title="هشدار انقضای سرویس",
-                        body=f"سرویس #{service.id} کمتر از ۳ روز دیگر منقضی می‌شود.",
-                    )
+                added = await _add_notification(
+                    db,
+                    service=service,
+                    kind="service_expiry_warning",
+                    title="هشدار انقضای سرویس",
+                    body=f"سرویس #{service.id} کمتر از ۳ روز دیگر منقضی می‌شود.",
+                    idempotency_key=f"service-expiry-warning:{service.id}",
                 )
                 metadata["expiry_warning_sent"] = True
                 service.metadata_json = metadata
-                changed = True
+                changed = changed or added or True
         if changed:
             await db.commit()
 
