@@ -34,17 +34,18 @@ async def _credentials(db: AsyncSession, tenant_id: int) -> PasarGuardCredential
         raise ValueError("PasarGuard credentials are incomplete") from exc
 
 
-async def provision_service_for_order(db: AsyncSession, *, tenant_id: int, order_id: int, user_id: int, duration_days: int, quota_gb: int | None) -> Service:
+async def provision_service_for_order(db: AsyncSession, *, tenant_id: int, order_id: int, user_id: int, plan_id: int, duration_days: int, quota_gb: int | None) -> Service:
     service = await db.scalar(select(Service).where(Service.tenant_id == tenant_id, Service.user_id == user_id, Service.metadata_json["order_id"].as_integer() == order_id))
     if service is not None and service.status == "active":
         return service
+    metadata = {"order_id": order_id, "plan_id": plan_id, "duration_days": duration_days, "quota_gb": quota_gb}
     if service is None:
-        service = Service(tenant_id=tenant_id, user_id=user_id, status="provisioning", metadata_json={"order_id": order_id, "duration_days": duration_days, "quota_gb": quota_gb})
+        service = Service(tenant_id=tenant_id, user_id=user_id, status="provisioning", metadata_json=metadata)
         db.add(service)
         await db.flush()
     else:
         service.status = "provisioning"
-        service.metadata_json = {**(service.metadata_json or {}), "duration_days": duration_days, "quota_gb": quota_gb}
+        service.metadata_json = {**(service.metadata_json or {}), **metadata}
 
     user = await db.get(User, user_id)
     if user is None:
@@ -54,12 +55,7 @@ async def provision_service_for_order(db: AsyncSession, *, tenant_id: int, order
 
     client = PasarGuardClient(await _credentials(db, tenant_id), timeout_seconds=settings.pasarguard_timeout_seconds)
     remote_username = _username(user, order_id)
-    payload = {
-        "username": remote_username,
-        "password": _password(),
-        "data_limit": quota_gb * 1024**3 if quota_gb is not None else None,
-        "expire": int((datetime.now(UTC) + timedelta(days=duration_days)).timestamp()),
-    }
+    payload = {"username": remote_username, "password": _password(), "data_limit": quota_gb * 1024**3 if quota_gb is not None else None, "expire": int((datetime.now(UTC) + timedelta(days=duration_days)).timestamp())}
     try:
         response = await client.create_user(payload)
     except Exception:
