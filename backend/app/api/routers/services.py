@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import bearer, require_permission, require_tenant_match
 from app.core.db import get_db
 from app.models.entities import Service
+from app.services.audit import audit_sensitive
+from app.services.notifications import enqueue
 from app.services.provisioning import get_service_subscription, provision_service_for_order, renew_service, revoke_service
 
 r = APIRouter(prefix="/services", tags=["services"])
@@ -85,12 +87,15 @@ async def retry_provisioning(service_id: int, tenant_id: int, claims=Depends(req
         duration_days = int(metadata["duration_days"])
         quota_gb = metadata.get("quota_gb")
         quota_gb = int(quota_gb) if quota_gb is not None else None
-        metadata["retry_count"] = retry_count + 1
+        attempt = retry_count + 1
+        metadata["retry_count"] = attempt
         metadata["last_retry_at"] = datetime.now(UTC).isoformat()
         service.metadata_json = metadata
         await db.flush()
         result = await provision_service_for_order(db, tenant_id=tenant_id, order_id=int(metadata["order_id"]), user_id=service.user_id, plan_id=plan_id, duration_days=duration_days, quota_gb=quota_gb)
-        result.metadata_json = {**(result.metadata_json or {}), "retry_count": retry_count + 1}
+        result.metadata_json = {**(result.metadata_json or {}), "retry_count": attempt}
+        await enqueue(db, tenant_id=tenant_id, user_id=service.user_id, kind="service_status", title="سرویس فعال شد", body=f"سرویس #{service.id} پس از تلاش مجدد فعال شد.", key=f"service:{service.id}:retry:{attempt}")
+        audit_sensitive(db, action="service.retry", tenant_id=tenant_id, actor_type="admin", actor_id=claims.get("user_id") or claims.get("sub"), target_type="service", target_id=service.id, metadata={"attempt": attempt})
         await db.commit()
         return _serialize(result)
     except (KeyError, TypeError, ValueError) as exc:
@@ -104,9 +109,11 @@ async def retry_provisioning(service_id: int, tenant_id: int, claims=Depends(req
 @r.post("/{service_id}/renew")
 async def renew(service_id: int, tenant_id: int, payload: RenewalRequest, claims=Depends(bearer), db: AsyncSession = Depends(get_db)):
     require_tenant_match(tenant_id, claims)
-    await _get_owned_service(db, service_id, tenant_id, claims)
+    service = await _get_owned_service(db, service_id, tenant_id, claims)
     try:
         result = await renew_service(db, tenant_id=tenant_id, service_id=service_id, duration_days=payload.duration_days, quota_gb=payload.quota_gb)
+        await enqueue(db, tenant_id=tenant_id, user_id=service.user_id, kind="service_renewed", title="سرویس تمدید شد", body=f"سرویس #{service.id} با موفقیت تمدید شد.", key=f"service:{service.id}:renewed:{result.expires_at.isoformat() if result.expires_at else 'none'}")
+        audit_sensitive(db, action="service.renew", tenant_id=tenant_id, actor_type="user" if not _admin(claims) else "admin", actor_id=claims.get("user_id") or claims.get("sub"), target_type="service", target_id=service.id, metadata={"duration_days": payload.duration_days, "quota_gb": payload.quota_gb})
         await db.commit()
         return _serialize(result)
     except ValueError as exc:
@@ -120,8 +127,11 @@ async def renew(service_id: int, tenant_id: int, payload: RenewalRequest, claims
 @r.post("/{service_id}/revoke")
 async def revoke(service_id: int, tenant_id: int, claims=Depends(require_permission("services.write")), db: AsyncSession = Depends(get_db)):
     require_tenant_match(tenant_id, claims)
+    service = await _get_owned_service(db, service_id, tenant_id, claims)
     try:
         result = await revoke_service(db, tenant_id=tenant_id, service_id=service_id)
+        await enqueue(db, tenant_id=tenant_id, user_id=service.user_id, kind="service_status", title="سرویس غیرفعال شد", body=f"سرویس #{service.id} غیرفعال شد.", key=f"service:{service.id}:revoked")
+        audit_sensitive(db, action="service.revoke", tenant_id=tenant_id, actor_type="admin", actor_id=claims.get("user_id") or claims.get("sub"), target_type="service", target_id=service.id, metadata={"previous_status": service.status})
         await db.commit()
         return _serialize(result)
     except ValueError as exc:
