@@ -23,7 +23,11 @@ def serialize_bot(bot: BotInstance) -> dict:
     }
 
 
-def assert_bot_tenant(bot: BotInstance, claims: dict, requested_tenant: int | None) -> None:
+def assert_bot_tenant(
+    bot: BotInstance,
+    claims: dict,
+    requested_tenant: int | None,
+) -> None:
     if claims.get("is_platform_owner"):
         if requested_tenant is not None and bot.tenant_id != requested_tenant:
             raise HTTPException(403, "cross-tenant bot access blocked")
@@ -111,7 +115,11 @@ async def stop_bot(
     from app.bot.runtime import runtime
 
     try:
-        expected_tenant_id = None if claims.get("is_platform_owner") else int(claims["tenant_id"])
+        expected_tenant_id = (
+            None
+            if claims.get("is_platform_owner")
+            else int(claims["tenant_id"])
+        )
         await runtime.stop_bot(bot.id, expected_tenant_id=expected_tenant_id)
     except PermissionError as exc:
         raise HTTPException(403, "cross-tenant bot control blocked") from exc
@@ -132,7 +140,11 @@ async def suspend_bot(
     from app.bot.runtime import runtime
 
     try:
-        expected_tenant_id = None if claims.get("is_platform_owner") else int(claims["tenant_id"])
+        expected_tenant_id = (
+            None
+            if claims.get("is_platform_owner")
+            else int(claims["tenant_id"])
+        )
         await runtime.suspend_bot(bot.id, expected_tenant_id=expected_tenant_id)
     except PermissionError as exc:
         raise HTTPException(403, "cross-tenant bot control blocked") from exc
