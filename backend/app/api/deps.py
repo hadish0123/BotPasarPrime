@@ -1,4 +1,4 @@
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from app.security.jwt import decode_token
 
@@ -12,7 +12,7 @@ def bearer(authorization: str | None = Header(default=None)):
         raise HTTPException(401, "invalid token") from None
 
 
-def tenant_context(claims=bearer()):
+def tenant_context(claims=Depends(bearer)):
     tenant_id = claims.get("tenant_id")
     is_platform_owner = bool(claims.get("is_platform_owner"))
     if tenant_id is None and not is_platform_owner:
@@ -21,11 +21,10 @@ def tenant_context(claims=bearer()):
 
 
 def require_permission(permission: str):
-    def dep(claims=tenant_context()):
+    def dep(claims=Depends(tenant_context)):
         if permission not in claims.get("permissions", []):
             raise HTTPException(403, "forbidden")
         return claims
-
     return dep
 
 
