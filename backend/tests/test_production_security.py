@@ -7,13 +7,17 @@ import urllib.parse
 import pytest
 
 from app.core.tenant_isolation import assert_tenant_id
-from app.security.telegram_init_data import validate_init_data
 from app.security.rbac import allowed
+from app.security.telegram_init_data import validate_init_data
 
 
 def make_init_data(bot_token: str, auth_date: int) -> str:
     user = {"id": 12345, "first_name": "Test"}
-    data = {"auth_date": str(auth_date), "query_id": "Q", "user": json.dumps(user, separators=(",", ":"))}
+    data = {
+        "auth_date": str(auth_date),
+        "query_id": "Q",
+        "user": json.dumps(user, separators=(",", ":")),
+    }
     check = "\n".join(f"{k}={data[k]}" for k in sorted(data))
     secret = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
     digest = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
