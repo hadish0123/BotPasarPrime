@@ -8,9 +8,32 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: 3xshop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d 3xshop"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
     defaults:
       run:
         working-directory: backend
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/3xshop
+      JWT_SECRET: test-jwt-secret-for-ci-only-32-characters
+      FERNET_KEY: 8sX4Q6fVQ5f4G7q4gXfH0d5k0M9a5Yv1xV8Y2gJ3lQ0=
+      TELEGRAM_BOT_TOKEN: test-token
+      CENTRAL_BOT_TOKEN: test-central-token
+      TELEGRAM_WEBHOOK_SECRET: test-webhook-secret
+      CORS_ORIGINS: http://localhost:5173
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,6 +42,9 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m compileall -q app tests
       - run: pytest -q
+      - run: alembic upgrade head
+      - run: alembic downgrade base
+      - run: alembic upgrade head
       - run: ruff check app tests
 
   frontend:
