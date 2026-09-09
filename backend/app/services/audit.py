@@ -15,13 +15,17 @@ SENSITIVE_ACTIONS = {
     "tenant.create", "tenant.update", "tenant.suspend", "tenant.deactivate", "tenant.activate",
     "credential.change", "payment.verify", "payment.reject", "payment.wallet", "payment.refund",
     "wallet.credit", "wallet.debit", "role.change", "product.change", "price.change",
-    "service.create", "service.update", "service.revoke",
+    "service.create", "service.update", "service.retry", "service.renew", "service.revoke",
+    "onboarding.approved", "onboarding.rejected", "payment.expire",
 }
 
 
 def sanitize_metadata(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return {str(key): "[REDACTED]" if str(key).strip().lower() in SENSITIVE_KEYS else sanitize_metadata(item) for key, item in value.items()}
+        return {
+            str(key): "[REDACTED]" if str(key).strip().lower() in SENSITIVE_KEYS else sanitize_metadata(item)
+            for key, item in value.items()
+        }
     if isinstance(value, (list, tuple, set)):
         return [sanitize_metadata(item) for item in value]
     return value
