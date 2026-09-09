@@ -35,4 +35,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     bind = op.get_bind()
-    bind.execute(sa.text("DELETE FROM permissions WHERE key = ANY(:keys)"), {"keys": PERMISSIONS})
+    table = sa.table("permissions", sa.column("key", sa.String(100)))
+    bind.execute(table.delete().where(table.c.key.in_(PERMISSIONS)))
