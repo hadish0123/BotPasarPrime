@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
@@ -34,6 +35,7 @@ from app.bot.central import start_central_bot, stop_central_bot
 from app.bot.runtime import runtime
 from app.core.config import settings
 from app.services.bot_leader import acquire_bot_leader, release_bot_leader
+from app.services.scheduler import scheduler_loop
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -53,15 +55,23 @@ async def lifespan(_: FastAPI):
     settings.validate_runtime()
     is_production = settings.app_env.lower() in {"production", "prod"}
     bot_leader = False
+    scheduler_stop = asyncio.Event()
+    scheduler_task = None
     if is_production and (settings.tenant_bots_enabled or settings.central_bot_enabled):
         bot_leader = await acquire_bot_leader()
         if bot_leader and settings.tenant_bots_enabled:
             await runtime.start_approved_bots()
         if bot_leader and settings.central_bot_enabled:
             await start_central_bot()
+        if bot_leader:
+            scheduler_task = asyncio.create_task(scheduler_loop(scheduler_stop), name="3xshop-scheduler")
     try:
         yield
     finally:
+        if scheduler_task is not None:
+            scheduler_stop.set()
+            scheduler_task.cancel()
+            await asyncio.gather(scheduler_task, return_exceptions=True)
         if bot_leader:
             if settings.central_bot_enabled:
                 await stop_central_bot()
