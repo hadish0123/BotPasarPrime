@@ -7,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import bearer, require_permission, require_tenant_match
 from app.api.schemas import TicketCreate, TicketReply
 from app.core.db import get_db
-from app.models.entities import Notification, Ticket, TicketMessage
+from app.models.entities import Ticket, TicketMessage
+from app.services.notifications import enqueue
 
 r = APIRouter(prefix="/support", tags=["support"])
 
@@ -61,16 +62,19 @@ async def reply_ticket(ticket_id: int, x: TicketReply, tenant_id: int, claims=De
     if not is_customer and not is_support:
         raise HTTPException(403, "forbidden")
     sender_type = "user" if is_customer else "admin"
-    db.add(TicketMessage(ticket_id=ticket.id, sender_type=sender_type, body=x.body))
+    message = TicketMessage(ticket_id=ticket.id, sender_type=sender_type, body=x.body)
+    db.add(message)
+    await db.flush()
     ticket.status = "open"
     if sender_type == "admin":
-        db.add(Notification(
+        await enqueue(
+            db,
             tenant_id=tenant_id,
             user_id=ticket.user_id,
             kind="ticket_reply",
             title="پاسخ تیکت",
             body=f"برای تیکت «{ticket.subject}» پاسخ جدید دارید.",
-            idempotency_key=f"ticket-reply:{ticket.id}:{current}:{x.body[:80]}",
-        ))
+            key=f"ticket:{ticket.id}:reply:{message.id}",
+        )
     await db.commit()
     return {"id": ticket.id, "status": ticket.status}
