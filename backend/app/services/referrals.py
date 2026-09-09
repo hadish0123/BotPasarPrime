@@ -50,8 +50,8 @@ async def create_commission_ledger(db: AsyncSession, tenant_id: int, referral_id
         raise ValueError("referral_user_mismatch")
     existing = await db.scalar(select(ReferralTransaction).where(ReferralTransaction.idempotency_key == idempotency_key))
     if existing:
-        if existing.tenant_id != tenant_id:
-            raise ValueError("cross_tenant_ledger_access")
+        if existing.tenant_id != tenant_id or existing.user_id != user_id or existing.order_id != order_id:
+            raise ValueError("commission_idempotency_conflict")
         return existing
     ledger = ReferralTransaction(referral_id=referral.id, tenant_id=tenant_id, order_id=order_id, user_id=user_id, amount=amount, commission_percent=percent, ledger_type="commission", idempotency_key=idempotency_key)
     db.add(ledger)
