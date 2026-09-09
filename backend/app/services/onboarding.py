@@ -16,6 +16,8 @@ from app.models.entities import (
     User,
 )
 from app.models.onboarding import OnboardingPayment
+from app.pasarguard.base import PasarGuardCredentials
+from app.pasarguard.client import PasarGuardClient
 from app.security.crypto import box
 
 VALID_PATHS = {"primevpn_representative", "personal_panel"}
@@ -44,12 +46,7 @@ def validate_bot_token(value: str) -> str:
     return value
 
 
-async def _credential(
-    db: AsyncSession,
-    tenant_id: int,
-    kind: str,
-    value: str,
-) -> None:
+async def _credential(db: AsyncSession, tenant_id: int, kind: str, value: str) -> None:
     db.add(
         TenantCredential(
             tenant_id=tenant_id,
@@ -69,11 +66,7 @@ async def get_user(
     result = await db.execute(select(User).where(User.telegram_id == telegram_id))
     user = result.scalar_one_or_none()
     if user is None:
-        user = User(
-            telegram_id=telegram_id,
-            username=username,
-            first_name=first_name,
-        )
+        user = User(telegram_id=telegram_id, username=username, first_name=first_name)
         db.add(user)
         await db.flush()
     else:
@@ -117,13 +110,22 @@ async def create_onboarding(
         raise ValueError("tenant name is required")
 
     existing = await db.execute(
-        select(Tenant).where(
-            Tenant.slug == slug,
-            Tenant.is_deleted.is_(False),
-        )
+        select(Tenant).where(Tenant.slug == slug, Tenant.is_deleted.is_(False))
     )
     if existing.scalar_one_or_none() is not None:
         raise ValueError("tenant slug already exists")
+
+    credentials = PasarGuardCredentials(
+        base_url=login_url,
+        api_token=api_token,
+        username=pasarguard_username,
+    )
+    health = await PasarGuardClient(
+        credentials,
+        timeout_seconds=settings.pasarguard_timeout_seconds,
+    ).health()
+    if not health.ok:
+        raise ValueError("PasarGuard health check failed")
 
     user = await get_user(
         db,
@@ -148,6 +150,7 @@ async def create_onboarding(
                 "onboarding_path": path,
                 "activation_fee_toman": fee,
                 "payment_status": "not_required" if fee == 0 else "unpaid",
+                "pasarguard_health": "verified",
             },
         )
     )
@@ -198,6 +201,9 @@ async def submit_activation_payment(
     telegram_id: int,
     reference: str,
 ) -> OnboardingPayment:
+    reference = reference.strip()
+    if not reference:
+        raise ValueError("payment reference is required")
     user = await db.scalar(select(User).where(User.telegram_id == telegram_id))
     if user is None:
         raise ValueError("user not found")
@@ -211,7 +217,7 @@ async def submit_activation_payment(
         raise ValueError("onboarding payment not found")
     if payment.status != "awaiting_payment":
         raise ValueError("onboarding payment is not awaiting payment")
-    payment.reference = reference.strip()
+    payment.reference = reference
     payment.status = "submitted"
 
     approval = await db.scalar(
