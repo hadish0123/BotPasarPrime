@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from enum import StrEnum
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
@@ -14,11 +14,7 @@ from telegram.ext import (
 
 from app.core.config import settings
 from app.core.db import SessionLocal
-from app.models import (
-    ApprovalRequest,
-    BotInstance,
-    Tenant,
-)
+from app.models import ApprovalRequest, BotInstance, Tenant
 from app.services.tenant_activation import (
     activate_approved_tenant,
     approve_tenant,
@@ -26,6 +22,7 @@ from app.services.tenant_activation import (
 )
 
 OWNER_TELEGRAM_ID = settings.owner_telegram_id or 0
+_central_application: Application | None = None
 
 
 class CentralMenu(StrEnum):
@@ -34,7 +31,6 @@ class CentralMenu(StrEnum):
     REQUEST_STATUS = "central:request_status"
     SUPPORT = "central:support"
     HELP = "central:help"
-
     OWNER_DASHBOARD = "owner:dashboard"
     OWNER_REQUESTS = "owner:requests"
     OWNER_TENANTS = "owner:tenants"
@@ -63,36 +59,11 @@ def is_owner(user_id: int) -> bool:
 def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(
-                    "👑 نمایندگان PRIMEVPN",
-                    callback_data=CentralMenu.REPRESENTATIVES.value,
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🖥️ پنل شخصی من",
-                    callback_data=CentralMenu.PERSONAL_PANEL.value,
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "📋 وضعیت درخواست من",
-                    callback_data=CentralMenu.REQUEST_STATUS.value,
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "💬 پشتیبانی",
-                    callback_data=CentralMenu.SUPPORT.value,
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "❓ راهنما",
-                    callback_data=CentralMenu.HELP.value,
-                )
-            ],
+            [InlineKeyboardButton("👑 نمایندگان PRIMEVPN", callback_data=CentralMenu.REPRESENTATIVES.value)],
+            [InlineKeyboardButton("🖥️ پنل شخصی من", callback_data=CentralMenu.PERSONAL_PANEL.value)],
+            [InlineKeyboardButton("📋 وضعیت درخواست من", callback_data=CentralMenu.REQUEST_STATUS.value)],
+            [InlineKeyboardButton("💬 پشتیبانی", callback_data=CentralMenu.SUPPORT.value)],
+            [InlineKeyboardButton("❓ راهنما", callback_data=CentralMenu.HELP.value)],
         ]
     )
 
@@ -100,62 +71,12 @@ def main_menu() -> InlineKeyboardMarkup:
 def owner_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(
-                    "📊 داشبورد",
-                    callback_data=CentralMenu.OWNER_DASHBOARD.value,
-                ),
-                InlineKeyboardButton(
-                    "🆕 درخواست‌های جدید",
-                    callback_data=CentralMenu.OWNER_REQUESTS.value,
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "🏢 Tenantها",
-                    callback_data=CentralMenu.OWNER_TENANTS.value,
-                ),
-                InlineKeyboardButton(
-                    "👥 کاربران",
-                    callback_data=CentralMenu.OWNER_USERS.value,
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "🤖 ربات‌ها",
-                    callback_data=CentralMenu.OWNER_BOTS.value,
-                ),
-                InlineKeyboardButton(
-                    "💳 پرداخت‌ها",
-                    callback_data=CentralMenu.OWNER_PAYMENTS.value,
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔌 سرورها/اتصال‌ها",
-                    callback_data=CentralMenu.OWNER_CONNECTIONS.value,
-                ),
-                InlineKeyboardButton(
-                    "📈 گزارش‌ها",
-                    callback_data=CentralMenu.OWNER_REPORTS.value,
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔔 اعلان‌ها",
-                    callback_data=CentralMenu.OWNER_NOTIFICATIONS.value,
-                ),
-                InlineKeyboardButton(
-                    "⚙️ تنظیمات",
-                    callback_data=CentralMenu.OWNER_SETTINGS.value,
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "🛡️ Audit Log",
-                    callback_data=CentralMenu.OWNER_AUDIT.value,
-                )
-            ],
+            [InlineKeyboardButton("📊 داشبورد", callback_data=CentralMenu.OWNER_DASHBOARD.value), InlineKeyboardButton("🆕 درخواست‌ها", callback_data=CentralMenu.OWNER_REQUESTS.value)],
+            [InlineKeyboardButton("🏢 Tenantها", callback_data=CentralMenu.OWNER_TENANTS.value), InlineKeyboardButton("👥 کاربران", callback_data=CentralMenu.OWNER_USERS.value)],
+            [InlineKeyboardButton("🤖 ربات‌ها", callback_data=CentralMenu.OWNER_BOTS.value), InlineKeyboardButton("💳 پرداخت‌ها", callback_data=CentralMenu.OWNER_PAYMENTS.value)],
+            [InlineKeyboardButton("🔌 اتصال‌ها", callback_data=CentralMenu.OWNER_CONNECTIONS.value), InlineKeyboardButton("📈 گزارش‌ها", callback_data=CentralMenu.OWNER_REPORTS.value)],
+            [InlineKeyboardButton("🔔 اعلان‌ها", callback_data=CentralMenu.OWNER_NOTIFICATIONS.value), InlineKeyboardButton("⚙️ تنظیمات", callback_data=CentralMenu.OWNER_SETTINGS.value)],
+            [InlineKeyboardButton("🛡️ Audit Log", callback_data=CentralMenu.OWNER_AUDIT.value)],
         ]
     )
 
@@ -163,568 +84,207 @@ def owner_menu() -> InlineKeyboardMarkup:
 def owner_request_keyboard(request_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(
-                    "✅ تأیید",
-                    callback_data=f"{OwnerAction.APPROVE.value}:{request_id}",
-                ),
-                InlineKeyboardButton(
-                    "❌ رد",
-                    callback_data=f"{OwnerAction.REJECT.value}:{request_id}",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    "⏸ تعلیق",
-                    callback_data=f"{OwnerAction.SUSPEND.value}:{request_id}",
-                ),
-                InlineKeyboardButton(
-                    "🟢 فعال‌سازی",
-                    callback_data=f"{OwnerAction.ACTIVATE.value}:{request_id}",
-                ),
-            ],
+            [InlineKeyboardButton("✅ تأیید", callback_data=f"owner:approve:{request_id}"), InlineKeyboardButton("❌ رد", callback_data=f"owner:reject:{request_id}")],
+            [InlineKeyboardButton("⏸ تعلیق", callback_data=f"owner:suspend:{request_id}"), InlineKeyboardButton("🟢 فعال‌سازی", callback_data=f"owner:activate:{request_id}")],
         ]
     )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-
-    if not user:
+    if not user or not update.message:
         return
-
-    text = "👋 به 3XSHOP خوش آمدید.\n\nاز منوی زیر مسیر موردنظر خود را انتخاب کنید:"
-
-    if update.message:
-        await update.message.reply_text(
-            text,
-            reply_markup=main_menu(),
-        )
+    await update.message.reply_text(
+        "👋 به 3XSHOP خوش آمدید.\n\nاز منوی زیر مسیر موردنظر خود را انتخاب کنید:",
+        reply_markup=owner_menu() if is_owner(user.id) else main_menu(),
+    )
 
 
 async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-
     if not user or not is_owner(user.id):
         if update.message:
             await update.message.reply_text("⛔ دسترسی غیرمجاز.")
         return
-
     if update.message:
-        await update.message.reply_text(
-            "👑 پنل مالک 3XSHOP\n\nتمام عملیات مدیریتی از این بخش انجام می‌شود.",
-            reply_markup=owner_menu(),
-        )
-
-
-def _count(db, model, **filters) -> int:
-    query = db.query(model)
-
-    for key, value in filters.items():
-        query = query.filter(getattr(model, key) == value)
-
-    return query.count()
+        await update.message.reply_text("👑 پنل مالک 3XSHOP", reply_markup=owner_menu())
 
 
 async def owner_dashboard(query) -> None:
-    db = SessionLocal()
-
-    try:
-        tenants = _count(db, Tenant, is_deleted=False)
-        pending = _count(db, ApprovalRequest, status="pending_review")
-        bots = _count(db, BotInstance)
-
-        text = (
-            "📊 داشبورد مالک\n\n"
-            f"🏢 Tenantها: {tenants}\n"
-            f"🆕 درخواست‌های در انتظار: {pending}\n"
-            f"🤖 ربات‌ها: {bots}\n"
-        )
-
-        await query.edit_message_text(
-            text,
-            reply_markup=owner_menu(),
-        )
-    finally:
-        await db.close()
-
-
-async def owner_requests(query) -> None:
-    db = SessionLocal()
-
-    try:
-        approval_result = await db.execute(
-            select(ApprovalRequest)
-            .where(ApprovalRequest.status == "pending_review")
-            .order_by(ApprovalRequest.created_at.asc())
-            .limit(20)
-        )
-        requests = approval_result.scalars().all()
-
-        if not requests:
-            await query.edit_message_text(
-                "🆕 درخواست جدیدی وجود ندارد.",
-                reply_markup=owner_menu(),
-            )
-            return
-
-        for approval_request in requests:
-            tenant_result = await db.execute(
-                select(Tenant).where(Tenant.id == approval_request.tenant_id)
-            )
-            tenant = tenant_result.scalar_one_or_none()
-
-            if tenant is None:
-                continue
-
-            path_label = (
-                "👑 نماینده PRIMEVPN"
-                if approval_request.path == "primevpn_representative"
-                else "🖥️ پنل شخصی"
-            )
-
-            text = (
-                "🆕 درخواست فعال‌سازی\n\n"
-                f"🏢 Tenant: {tenant.name}\n"
-                f"🔗 مسیر: {path_label}\n"
-                f"📌 وضعیت: {approval_request.status}\n\n"
-                "اطلاعات حساس در این پیام نمایش داده نمی‌شوند."
-            )
-
-            await query.message.reply_text(
-                text,
-                reply_markup=owner_request_keyboard(approval_request.id),
-            )
-
-        await query.edit_message_text(
-            "🆕 درخواست‌های در انتظار بررسی در پیام‌های بالا نمایش داده شدند.",
-            reply_markup=owner_menu(),
-        )
-    finally:
-        await db.close()
-
-
-async def owner_tenants(query) -> None:
-    db = SessionLocal()
-
-    try:
-        result = await db.execute(
-            select(Tenant)
-            .where(Tenant.is_deleted.is_(False))
-            .order_by(Tenant.created_at.desc())
-            .limit(30)
-        )
-        tenants = result.scalars().all()
-
-        if not tenants:
-            text = "🏢 هیچ Tenant فعالی ثبت نشده است."
-        else:
-            lines = ["🏢 Tenantها\n"]
-
-            for tenant in tenants:
-                lines.append(f"• {tenant.name} — {tenant.status}")
-
-            text = "\n".join(lines)
-
-        await query.edit_message_text(
-            text,
-            reply_markup=owner_menu(),
-        )
-    finally:
-        await db.close()
-
-
-async def owner_bots(query) -> None:
-    db = SessionLocal()
-
-    try:
-        result = await db.execute(select(BotInstance).order_by(BotInstance.id.desc()).limit(30))
-        bots = result.scalars().all()
-
-        if not bots:
-            text = "🤖 هیچ Bot Instance ثبت نشده است."
-        else:
-            lines = ["🤖 ربات‌ها\n"]
-
-            for bot in bots:
-                lines.append(f"• {bot.name} — {bot.status}")
-
-            text = "\n".join(lines)
-
-        await query.edit_message_text(
-            text,
-            reply_markup=owner_menu(),
-        )
-    finally:
-        await db.close()
-
-
-async def placeholder_owner_section(query, title: str) -> None:
+    async with SessionLocal() as db:
+        tenants = await db.scalar(select(func.count(Tenant.id)).where(Tenant.is_deleted.is_(False))) or 0
+        pending = await db.scalar(select(func.count(ApprovalRequest.id)).where(ApprovalRequest.status == "pending_review")) or 0
+        bots = await db.scalar(select(func.count(BotInstance.id))) or 0
     await query.edit_message_text(
-        f"{title}\n\n"
-        "این بخش در معماری 3XSHOP تعریف شده و در مراحل مربوط به خودش "
-        "به ماژول عملیاتی متصل می‌شود.",
+        f"📊 داشبورد مالک\n\n🏢 Tenantها: {tenants}\n🆕 درخواست‌های در انتظار: {pending}\n🤖 ربات‌ها: {bots}",
         reply_markup=owner_menu(),
     )
 
 
-async def handle_owner_action(
-    query,
-    action: str,
-    request_id: int,
-) -> None:
+async def owner_requests(query) -> None:
+    async with SessionLocal() as db:
+        result = await db.execute(select(ApprovalRequest).where(ApprovalRequest.status == "pending_review").order_by(ApprovalRequest.created_at.asc()).limit(20))
+        requests = list(result.scalars().all())
+        for item in requests:
+            tenant = await db.get(Tenant, item.tenant_id)
+            if tenant:
+                await query.message.reply_text(
+                    f"🆕 درخواست فعال‌سازی\n\n🏢 {tenant.name}\n🔗 مسیر: {item.path}\n📌 وضعیت: {item.status}",
+                    reply_markup=owner_request_keyboard(item.id),
+                )
+    await query.edit_message_text("🆕 درخواست‌های در انتظار در پیام‌های بالا نمایش داده شدند.", reply_markup=owner_menu())
+
+
+async def owner_tenants(query) -> None:
+    async with SessionLocal() as db:
+        result = await db.execute(select(Tenant).where(Tenant.is_deleted.is_(False)).order_by(Tenant.created_at.desc()).limit(30))
+        tenants = list(result.scalars().all())
+    text = "🏢 Tenantها\n\n" + ("\n".join(f"• {t.name} — {t.status}" for t in tenants) if tenants else "موردی ثبت نشده است.")
+    await query.edit_message_text(text, reply_markup=owner_menu())
+
+
+async def owner_bots(query) -> None:
+    async with SessionLocal() as db:
+        result = await db.execute(select(BotInstance).order_by(BotInstance.id.desc()).limit(30))
+        bots = list(result.scalars().all())
+    text = "🤖 ربات‌ها\n\n" + ("\n".join(f"• {b.name} — {b.status}" for b in bots) if bots else "موردی ثبت نشده است.")
+    await query.edit_message_text(text, reply_markup=owner_menu())
+
+
+async def placeholder_owner_section(query, title: str) -> None:
+    await query.edit_message_text(f"{title}\n\nاین بخش در نسخه عملیاتی از API مربوطه تغذیه می‌شود.", reply_markup=owner_menu())
+
+
+async def handle_owner_action(query, action: str, request_id: int) -> None:
     if not is_owner(query.from_user.id):
         await query.answer("⛔ دسترسی غیرمجاز.", show_alert=True)
         return
-
-    db = SessionLocal()
-
-    try:
-        approval_result = await db.execute(
-            select(ApprovalRequest).where(ApprovalRequest.id == request_id)
-        )
-        approval_request = approval_result.scalar_one_or_none()
-
-        if approval_request is None:
-            await query.answer(
-                "درخواست پیدا نشد.",
-                show_alert=True,
-            )
+    async with SessionLocal() as db:
+        try:
+            approval = await db.get(ApprovalRequest, request_id)
+            if approval is None:
+                raise ValueError("درخواست پیدا نشد")
+            tenant = await db.get(Tenant, approval.tenant_id)
+            if tenant is None:
+                raise ValueError("Tenant پیدا نشد")
+            if action == OwnerAction.APPROVE.value:
+                await approve_tenant(db, request_id)
+                await db.commit()
+                message = "✅ درخواست تأیید شد."
+            elif action == OwnerAction.REJECT.value:
+                await reject_tenant(db, request_id, note="Rejected by platform owner")
+                await db.commit()
+                message = "❌ درخواست رد شد."
+            elif action == OwnerAction.ACTIVATE.value:
+                await activate_approved_tenant(db, tenant.id)
+                await db.commit()
+                message = "🟢 Tenant فعال شد."
+            elif action == OwnerAction.SUSPEND.value:
+                tenant.status = "suspended"
+                await db.commit()
+                message = "⏸ Tenant تعلیق شد."
+            elif action == OwnerAction.DEACTIVATE.value:
+                tenant.status = "inactive"
+                await db.commit()
+                message = "🔴 Tenant غیرفعال شد."
+            else:
+                message = "عملیات ناشناخته است."
+        except (ValueError, RuntimeError) as exc:
+            await db.rollback()
+            await query.answer(str(exc), show_alert=True)
             return
-
-        tenant_result = await db.execute(
-            select(Tenant).where(Tenant.id == approval_request.tenant_id)
-        )
-        tenant = tenant_result.scalar_one_or_none()
-
-        if tenant is None:
-            await query.answer(
-                "Tenant مربوط به درخواست پیدا نشد.",
-                show_alert=True,
-            )
-            return
-
-        if action == OwnerAction.APPROVE.value:
-            if approval_request.status != "pending_review":
-                await query.answer(
-                    "این درخواست قبلاً بررسی شده است.",
-                    show_alert=True,
-                )
-                return
-
-            await approve_tenant(
-                db,
-                approval_request.id,
-            )
-            await db.commit()
-
-            await query.answer(
-                "درخواست تأیید شد.",
-                show_alert=False,
-            )
-
-            await query.edit_message_text(
-                f"✅ درخواست Tenant «{tenant.name}» تأیید شد.\n\n"
-                "برای فعال‌سازی نهایی، عملیات Activation انجام می‌شود.",
-                reply_markup=owner_menu(),
-            )
-
-        elif action == OwnerAction.REJECT.value:
-            if approval_request.status != "pending_review":
-                await query.answer(
-                    "این درخواست قبلاً بررسی شده است.",
-                    show_alert=True,
-                )
-                return
-
-            await reject_tenant(
-                db,
-                approval_request.id,
-                note="Rejected by platform owner",
-            )
-            await db.commit()
-
-            await query.answer("درخواست رد شد.")
-
-            await query.edit_message_text(
-                f"❌ درخواست Tenant «{tenant.name}» رد شد.",
-                reply_markup=owner_menu(),
-            )
-
-        elif action == OwnerAction.ACTIVATE.value:
-            if tenant.status != "approved":
-                await query.answer(
-                    "Tenant باید ابتدا تأیید شود.",
-                    show_alert=True,
-                )
-                return
-
-            await activate_approved_tenant(
-                db,
-                tenant.id,
-            )
-            await db.commit()
-
-            await query.answer("Tenant فعال شد.")
-
-            await query.edit_message_text(
-                f"🟢 Tenant «{tenant.name}» فعال شد.",
-                reply_markup=owner_menu(),
-            )
-
-        elif action == OwnerAction.SUSPEND.value:
-            tenant.status = "suspended"
-            await db.commit()
-
-            await query.answer("Tenant تعلیق شد.")
-
-            await query.edit_message_text(
-                f"⏸ Tenant «{tenant.name}» تعلیق شد.",
-                reply_markup=owner_menu(),
-            )
-
-        elif action == "owner:deactivate":
-            tenant.status = "inactive"
-            await db.commit()
-
-            await query.answer("Tenant غیرفعال شد.")
-
-            await query.edit_message_text(
-                f"🔴 Tenant «{tenant.name}» غیرفعال شد.",
-                reply_markup=owner_menu(),
-            )
-
-    except Exception:  # noqa: BLE001 - Telegram handler boundary must fail closed
-        await db.rollback()
-        await query.answer(
-            "عملیات انجام نشد؛ خطای داخلی رخ داد.",
-            show_alert=True,
-        )
-    finally:
-        await db.close()
+    await query.answer(message)
+    await query.edit_message_text(f"{message}\n\n🏢 {tenant.name}", reply_markup=owner_menu())
 
 
-async def callback_router(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> None:
+async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-
     if not query:
         return
-
     await query.answer()
-
     data = query.data or ""
-
-    if data.startswith("owner:approve:"):
-        await handle_owner_action(
-            query,
-            OwnerAction.APPROVE.value,
-            int(data.rsplit(":", 1)[1]),
-        )
-        return
-
-    if data.startswith("owner:reject:"):
-        await handle_owner_action(
-            query,
-            OwnerAction.REJECT.value,
-            int(data.rsplit(":", 1)[1]),
-        )
-        return
-
-    if data.startswith("owner:suspend:"):
-        await handle_owner_action(
-            query,
-            OwnerAction.SUSPEND.value,
-            int(data.rsplit(":", 1)[1]),
-        )
-        return
-
-    if data.startswith("owner:activate:"):
-        await handle_owner_action(
-            query,
-            OwnerAction.ACTIVATE.value,
-            int(data.rsplit(":", 1)[1]),
-        )
-        return
-
+    if data.startswith("owner:") and data.count(":") == 2:
+        action, request_id = data.rsplit(":", 1)
+        if action in {"owner:approve", "owner:reject", "owner:suspend", "owner:activate", "owner:deactivate"}:
+            await handle_owner_action(query, action, int(request_id))
+            return
     if data == CentralMenu.REPRESENTATIVES.value:
-        await query.edit_message_text(
-            "👑 نمایندگان PRIMEVPN\n\n"
-            "در این مسیر، اطلاعات اتصال PasarGuard و اطلاعات ربات "
-            "اختصاصی شما دریافت و پس از بررسی مالک فعال می‌شود.",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "⬅️ بازگشت",
-                            callback_data="central:home",
-                        )
-                    ]
-                ]
-            ),
-        )
+        text = "👑 ثبت نماینده PRIMEVPN\n\nاطلاعات اتصال PasarGuard و Bot Token را ثبت کنید. درخواست پس از بررسی Owner فعال می‌شود."
+    elif data == CentralMenu.PERSONAL_PANEL.value:
+        text = "🖥️ پنل شخصی\n\nفعال‌سازی یک‌باره ۲۵۰٬۰۰۰ تومان است و پس از ثبت پرداخت، Owner درخواست را بررسی می‌کند."
+    elif data == CentralMenu.REQUEST_STATUS.value:
+        text = "📋 وضعیت درخواست\n\nدرخواست شما بر اساس Telegram ID پیگیری می‌شود."
+    elif data == CentralMenu.SUPPORT.value:
+        text = "💬 پشتیبانی\n\nدرخواست خود را از طریق تیکت ثبت کنید."
+    elif data == CentralMenu.HELP.value:
+        text = "❓ راهنما\n\n👑 نماینده: اتصال به زیرساخت مرکزی\n🖥️ شخصی: اتصال به PasarGuard خودتان\n📋 وضعیت: پیگیری فعال‌سازی"
+    elif not is_owner(query.from_user.id):
+        await query.answer("⛔ دسترسی مالک موردنیاز است.", show_alert=True)
         return
-
-    if data == CentralMenu.PERSONAL_PANEL.value:
-        await query.edit_message_text(
-            "🖥️ پنل شخصی من\n\n"
-            "برای پنل شخصی، اطلاعات اتصال PasarGuard خودتان را ثبت "
-            "و هزینه فعال‌سازی یک‌باره را پرداخت می‌کنید.",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "⬅️ بازگشت",
-                            callback_data="central:home",
-                        )
-                    ]
-                ]
-            ),
-        )
-        return
-
-    if data == CentralMenu.REQUEST_STATUS.value:
-        await query.edit_message_text(
-            "📋 وضعیت درخواست من\n\n"
-            "درخواست‌های شما بر اساس Telegram ID شناسایی و وضعیت "
-            "آن‌ها نمایش داده خواهد شد.",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "⬅️ بازگشت",
-                            callback_data="central:home",
-                        )
-                    ]
-                ]
-            ),
-        )
-        return
-
-    if data == CentralMenu.SUPPORT.value:
-        await query.edit_message_text(
-            "💬 پشتیبانی\n\nبرای ارتباط با پشتیبانی، درخواست خود را ارسال کنید.",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "⬅️ بازگشت",
-                            callback_data="central:home",
-                        )
-                    ]
-                ]
-            ),
-        )
-        return
-
-    if data == CentralMenu.HELP.value:
-        await query.edit_message_text(
-            "❓ راهنما\n\n"
-            "👑 نمایندگان PRIMEVPN: اتصال به زیرساخت مرکزی\n"
-            "🖥️ پنل شخصی: اتصال به PasarGuard شخصی شما\n"
-            "📋 وضعیت درخواست: مشاهده وضعیت فعال‌سازی\n"
-            "💬 پشتیبانی: ارتباط با پشتیبانی",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "⬅️ بازگشت",
-                            callback_data="central:home",
-                        )
-                    ]
-                ]
-            ),
-        )
-        return
-
-    if data == "central:home":
-        await query.edit_message_text(
-            "منوی اصلی 3XSHOP",
-            reply_markup=main_menu(),
-        )
-        return
-
-    if not is_owner(query.from_user.id):
-        await query.answer(
-            "⛔ دسترسی مالک موردنیاز است.",
-            show_alert=True,
-        )
-        return
-
-    if data == CentralMenu.OWNER_DASHBOARD.value:
+    elif data == CentralMenu.OWNER_DASHBOARD.value:
         await owner_dashboard(query)
+        return
     elif data == CentralMenu.OWNER_REQUESTS.value:
         await owner_requests(query)
+        return
     elif data == CentralMenu.OWNER_TENANTS.value:
         await owner_tenants(query)
-    elif data == CentralMenu.OWNER_USERS.value:
-        await placeholder_owner_section(
-            query,
-            "👥 کاربران",
-        )
+        return
     elif data == CentralMenu.OWNER_BOTS.value:
         await owner_bots(query)
-    elif data == CentralMenu.OWNER_PAYMENTS.value:
-        await placeholder_owner_section(
-            query,
-            "💳 پرداخت‌ها",
-        )
-    elif data == CentralMenu.OWNER_CONNECTIONS.value:
-        await placeholder_owner_section(
-            query,
-            "🔌 سرورها/اتصال‌ها",
-        )
-    elif data == CentralMenu.OWNER_REPORTS.value:
-        await placeholder_owner_section(
-            query,
-            "📈 گزارش‌ها",
-        )
-    elif data == CentralMenu.OWNER_NOTIFICATIONS.value:
-        await placeholder_owner_section(
-            query,
-            "🔔 اعلان‌ها",
-        )
-    elif data == CentralMenu.OWNER_SETTINGS.value:
-        await placeholder_owner_section(
-            query,
-            "⚙️ تنظیمات",
-        )
-    elif data == CentralMenu.OWNER_AUDIT.value:
-        await placeholder_owner_section(
-            query,
-            "🛡️ Audit Log",
-        )
+        return
+    else:
+        await placeholder_owner_section(query, data)
+        return
+    await query.edit_message_text(text, reply_markup=main_menu())
 
 
 def build_application(token: str) -> Application:
     application = Application.builder().token(token).build()
-
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("owner", owner_command))
     application.add_handler(CallbackQueryHandler(callback_router))
-
     return application
+
+
+async def start_central_bot() -> None:
+    global _central_application
+    if _central_application is not None or not settings.central_bot_enabled:
+        return
+    if not settings.central_bot_token:
+        raise RuntimeError("CENTRAL_BOT_TOKEN is not configured")
+    if OWNER_TELEGRAM_ID <= 0:
+        raise RuntimeError("OWNER_TELEGRAM_ID is not configured")
+    application = build_application(settings.central_bot_token)
+    await application.initialize()
+    await application.start()
+    if application.updater is None:
+        await application.stop()
+        await application.shutdown()
+        raise RuntimeError("central bot updater is unavailable")
+    await application.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    _central_application = application
+
+
+async def stop_central_bot() -> None:
+    global _central_application
+    application = _central_application
+    _central_application = None
+    if application is None:
+        return
+    try:
+        if application.updater and application.updater.running:
+            await application.updater.stop()
+        await application.stop()
+    finally:
+        await application.shutdown()
 
 
 def main() -> None:
     token = os.getenv("CENTRAL_BOT_TOKEN")
-
-    if not token:
-        raise RuntimeError("CENTRAL_BOT_TOKEN is not configured")
-
-    if OWNER_TELEGRAM_ID <= 0:
-        raise RuntimeError("OWNER_TELEGRAM_ID is not configured")
-
-    application = build_application(token)
-
-    print("3XSHOP CENTRAL BOT: READY")
-    print("OWNER_ACCESS: ENABLED")
-    print("OWNER_APPROVAL: REQUIRED")
-    print("SECRETS_IN_MESSAGES: BLOCKED")
-
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    if not token or OWNER_TELEGRAM_ID <= 0:
+        raise RuntimeError("CENTRAL_BOT_TOKEN and OWNER_TELEGRAM_ID are required")
+    build_application(token).run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
