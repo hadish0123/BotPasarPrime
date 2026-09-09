@@ -64,6 +64,13 @@ async def reply_ticket(ticket_id: int, x: TicketReply, tenant_id: int, claims=De
     db.add(TicketMessage(ticket_id=ticket.id, sender_type=sender_type, body=x.body))
     ticket.status = "open"
     if sender_type == "admin":
-        db.add(Notification(tenant_id=tenant_id, user_id=ticket.user_id, kind="ticket_reply", title="پاسخ تیکت", body=f"برای تیکت «{ticket.subject}» پاسخ جدید دارید."))
+        db.add(Notification(
+            tenant_id=tenant_id,
+            user_id=ticket.user_id,
+            kind="ticket_reply",
+            title="پاسخ تیکت",
+            body=f"برای تیکت «{ticket.subject}» پاسخ جدید دارید.",
+            idempotency_key=f"ticket-reply:{ticket.id}:{current}:{x.body[:80]}",
+        ))
     await db.commit()
     return {"id": ticket.id, "status": ticket.status}
