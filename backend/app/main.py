@@ -32,6 +32,7 @@ from app.api.routers.wallet import r as wallet_router
 from app.bot.central import start_central_bot, stop_central_bot
 from app.bot.runtime import runtime
 from app.core.config import settings
+from app.services.bot_leader import acquire_bot_leader, release_bot_leader
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -50,17 +51,22 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 async def lifespan(_: FastAPI):
     settings.validate_runtime()
     is_production = settings.app_env.lower() in {"production", "prod"}
-    if is_production and settings.tenant_bots_enabled:
-        await runtime.start_approved_bots()
-    if is_production and settings.central_bot_enabled:
-        await start_central_bot()
+    bot_leader = False
+    if is_production and (settings.tenant_bots_enabled or settings.central_bot_enabled):
+        bot_leader = await acquire_bot_leader()
+        if bot_leader and settings.tenant_bots_enabled:
+            await runtime.start_approved_bots()
+        if bot_leader and settings.central_bot_enabled:
+            await start_central_bot()
     try:
         yield
     finally:
-        if is_production and settings.central_bot_enabled:
-            await stop_central_bot()
-        if is_production and settings.tenant_bots_enabled:
-            await runtime.shutdown_all()
+        if bot_leader:
+            if settings.central_bot_enabled:
+                await stop_central_bot()
+            if settings.tenant_bots_enabled:
+                await runtime.shutdown_all()
+            await release_bot_leader()
 
 
 app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan, docs_url="/docs" if settings.app_env.lower() not in {"production", "prod"} else None, redoc_url="/redoc" if settings.app_env.lower() not in {"production", "prod"} else None)
