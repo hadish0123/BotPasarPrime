@@ -1,57 +1,63 @@
-from pydantic import BaseModel, Field
+from decimal import Decimal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class TenantCreate(BaseModel):
-    slug: str = Field(min_length=2, max_length=80)
-    name: str
-    path: str
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
-class ProductCreate(BaseModel):
-    name: str
-    description: str | None = None
-    category: str | None = None
+class TenantCreate(StrictModel):
+    slug: str = Field(min_length=2, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
+    name: str = Field(min_length=2, max_length=150)
+    path: str = Field(min_length=1, max_length=30)
 
 
-class PlanCreate(BaseModel):
-    name: str
-    price: float
-    duration_days: int
-    quota_gb: int | None = None
-    discount_kind: str = "none"
-    discount_value: float = 0
+class ProductCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=150)
+    description: str | None = Field(default=None, max_length=5000)
+    category: str | None = Field(default=None, max_length=100)
 
 
-class OrderCreate(BaseModel):
-    plan_id: int
-    idempotency_key: str
+class PlanCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=120)
+    price: Decimal = Field(ge=0, max_digits=18, decimal_places=2)
+    duration_days: int = Field(gt=0, le=3650)
+    quota_gb: int | None = Field(default=None, ge=0, le=10000000)
+    discount_kind: str = Field(default="none", pattern=r"^(none|fixed|percent)$")
+    discount_value: Decimal = Field(default=Decimal("0"), ge=0, max_digits=18, decimal_places=2)
 
 
-class PaymentCreate(BaseModel):
-    order_id: int
-    amount: float
-    provider: str = "manual"
-    idempotency_key: str
+class OrderCreate(StrictModel):
+    plan_id: int = Field(gt=0)
+    idempotency_key: str = Field(min_length=8, max_length=100)
 
 
-class WalletPost(BaseModel):
-    user_id: int
-    amount: float
-    direction: str
-    reason: str
-    idempotency_key: str
+class PaymentCreate(StrictModel):
+    order_id: int = Field(gt=0)
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+    provider: str = Field(default="manual", min_length=2, max_length=40)
+    idempotency_key: str = Field(min_length=8, max_length=100)
 
 
-class CouponCalc(BaseModel):
-    code: str
-    total: float
+class WalletPost(StrictModel):
+    user_id: int = Field(gt=0)
+    amount: Decimal = Field(gt=0, max_digits=18, decimal_places=2)
+    direction: str = Field(pattern=r"^(credit|debit)$")
+    reason: str = Field(min_length=1, max_length=80)
+    idempotency_key: str = Field(min_length=8, max_length=120)
 
 
-class TicketCreate(BaseModel):
-    subject: str
-    body: str
+class CouponCalc(StrictModel):
+    code: str = Field(min_length=1, max_length=60)
+    total: Decimal = Field(ge=0, max_digits=18, decimal_places=2)
 
 
-class ApprovalAction(BaseModel):
+class TicketCreate(StrictModel):
+    subject: str = Field(min_length=1, max_length=200)
+    body: str = Field(min_length=1, max_length=10000)
+
+
+class ApprovalAction(StrictModel):
     approved: bool
-    note: str | None = None
+    note: str | None = Field(default=None, max_length=2000)
