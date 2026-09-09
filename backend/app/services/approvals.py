@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.entities import ApprovalRequest, AuditLog, BotInstance, Tenant
+from app.models.entities import ApprovalRequest, AuditLog, BotInstance, Tenant, TenantUser
 from app.models.onboarding import OnboardingPayment
 
 TRANSITIONS = {
@@ -29,7 +29,9 @@ async def review_approval(
     note: str | None = None,
 ) -> ApprovalRequest:
     result = await db.execute(
-        select(ApprovalRequest).where(ApprovalRequest.id == approval_id).with_for_update()
+        select(ApprovalRequest)
+        .where(ApprovalRequest.id == approval_id)
+        .with_for_update()
     )
     approval = result.scalar_one_or_none()
     if approval is None:
@@ -58,18 +60,25 @@ async def review_approval(
     approval.reviewer_id = str(reviewer_id)
     approval.note = note
 
+    bot = await db.scalar(
+        select(BotInstance).where(BotInstance.tenant_id == tenant.id)
+    )
+    owner = await db.scalar(
+        select(TenantUser).where(TenantUser.tenant_id == tenant.id)
+    )
+
     if approved:
         tenant.status = "approved"
-        result = await db.execute(select(BotInstance).where(BotInstance.tenant_id == tenant.id))
-        bot = result.scalar_one_or_none()
         if bot:
             bot.status = "approved"
+        if owner:
+            owner.status = "active"
     else:
         tenant.status = "rejected"
-        result = await db.execute(select(BotInstance).where(BotInstance.tenant_id == tenant.id))
-        bot = result.scalar_one_or_none()
         if bot:
-            bot.status = "rejected"
+            bot.status = "stopped"
+        if owner:
+            owner.status = "rejected"
 
     db.add(
         AuditLog(
