@@ -8,7 +8,7 @@ from alembic.script import ScriptDirectory
 import app.models.onboarding  # noqa: F401
 
 
-def test_migration_chain_has_single_root_and_expected_head() -> None:
+def test_migration_chain_has_single_root_and_current_head() -> None:
     backend = Path(__file__).resolve().parents[1]
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "migrations"))
@@ -19,4 +19,4 @@ def test_migration_chain_has_single_root_and_expected_head() -> None:
     heads = scripts.get_heads()
 
     assert [revision.revision for revision in roots] == ["0001_initial"]
-    assert heads == ["0003_page8_missing_tables"]
+    assert heads == ["0010_page16_notifications"]
