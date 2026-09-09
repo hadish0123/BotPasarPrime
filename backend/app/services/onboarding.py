@@ -6,16 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.entities import (
-    ApprovalRequest,
-    BotInstance,
-    Tenant,
-    TenantBranding,
-    TenantCredential,
-    TenantSettings,
-    TenantUser,
-    User,
-)
+from app.models.entities import ApprovalRequest, BotInstance, Tenant, TenantBranding, TenantCredential, TenantSettings, TenantUser, User
 from app.models.onboarding import OnboardingPayment
 from app.pasarguard.base import PasarGuardCredentials
 from app.pasarguard.client import PasarGuardClient
@@ -25,8 +16,7 @@ VALID_PATHS = {"primevpn_representative", "personal_panel"}
 
 
 def normalize_slug(value: str) -> str:
-    value = value.strip().lower()
-    value = re.sub(r"[^a-z0-9_-]+", "-", value)
+    value = re.sub(r"[^a-z0-9_-]+", "-", value.strip().lower())
     value = re.sub(r"-+", "-", value).strip("-")
     if not value:
         raise ValueError("invalid tenant slug")
@@ -63,22 +53,7 @@ async def get_user(db: AsyncSession, telegram_id: int, username: str | None = No
     return user
 
 
-async def create_onboarding(
-    db: AsyncSession,
-    *,
-    telegram_id: int,
-    username: str | None,
-    first_name: str | None,
-    slug: str,
-    name: str,
-    path: str,
-    api_token: str,
-    login_url: str,
-    pasarguard_username: str,
-    submitted_telegram_id: int,
-    bot_token: str,
-    idempotency_key: str,
-) -> tuple[Tenant, ApprovalRequest]:
+async def create_onboarding(db: AsyncSession, *, telegram_id: int, username: str | None, first_name: str | None, slug: str, name: str, path: str, api_token: str, login_url: str, pasarguard_username: str, submitted_telegram_id: int, bot_token: str, idempotency_key: str, bot_name: str = "Sales Bot") -> tuple[Tenant, ApprovalRequest]:
     if path not in VALID_PATHS:
         raise ValueError("invalid onboarding path")
     if submitted_telegram_id != telegram_id:
@@ -87,16 +62,10 @@ async def create_onboarding(
     if len(idempotency_key) < 8 or len(idempotency_key) > 120:
         raise ValueError("invalid idempotency key")
 
-    existing_settings = await db.scalar(
-        select(TenantSettings).where(
-            TenantSettings.settings["onboarding_idempotency_key"].as_string() == idempotency_key
-        )
-    )
+    existing_settings = await db.scalar(select(TenantSettings).where(TenantSettings.settings["onboarding_idempotency_key"].as_string() == idempotency_key))
     if existing_settings:
         tenant = await db.get(Tenant, existing_settings.tenant_id)
-        approval = await db.scalar(
-            select(ApprovalRequest).where(ApprovalRequest.tenant_id == existing_settings.tenant_id).order_by(ApprovalRequest.created_at.desc())
-        )
+        approval = await db.scalar(select(ApprovalRequest).where(ApprovalRequest.tenant_id == existing_settings.tenant_id).order_by(ApprovalRequest.created_at.desc()))
         if tenant is None or approval is None:
             raise ValueError("invalid onboarding idempotency record")
         return tenant, approval
@@ -105,54 +74,42 @@ async def create_onboarding(
     login_url = validate_url(login_url)
     pasarguard_username = pasarguard_username.strip()
     bot_token = validate_bot_token(bot_token)
+    bot_name = bot_name.strip()
     if len(api_token) < 8:
         raise ValueError("invalid api token")
     if not pasarguard_username:
         raise ValueError("pasarguard username is required")
+    if not bot_name or len(bot_name) > 100:
+        raise ValueError("invalid bot name")
 
     slug = normalize_slug(slug)
     name = name.strip()
     if not name:
         raise ValueError("tenant name is required")
-
-    existing = await db.scalar(select(Tenant).where(Tenant.slug == slug, Tenant.is_deleted.is_(False)))
-    if existing is not None:
+    if await db.scalar(select(Tenant).where(Tenant.slug == slug, Tenant.is_deleted.is_(False))) is not None:
         raise ValueError("tenant slug already exists")
 
-    health = await PasarGuardClient(
-        PasarGuardCredentials(base_url=login_url, api_token=api_token, username=pasarguard_username),
-        timeout_seconds=settings.pasarguard_timeout_seconds,
-    ).health()
+    health = await PasarGuardClient(PasarGuardCredentials(base_url=login_url, api_token=api_token, username=pasarguard_username), timeout_seconds=settings.pasarguard_timeout_seconds).health()
     if not health.ok:
         raise ValueError("PasarGuard health check failed")
 
     user = await get_user(db, telegram_id, username, first_name)
-    tenant = Tenant(slug=slug, name=name, status=("pending_review" if path == "primevpn_representative" else "awaiting_payment"))
+    fee = activation_fee(path)
+    tenant = Tenant(slug=slug, name=name, status=("pending_review" if not fee else "awaiting_payment"))
     db.add(tenant)
     await db.flush()
-
-    fee = activation_fee(path)
-    db.add(TenantSettings(tenant_id=tenant.id, settings={
-        "onboarding_path": path,
-        "onboarding_idempotency_key": idempotency_key,
-        "activation_fee_toman": fee,
-        "payment_status": "not_required" if fee == 0 else "unpaid",
-        "pasarguard_health": "verified",
-    }))
+    db.add(TenantSettings(tenant_id=tenant.id, settings={"onboarding_path": path, "onboarding_idempotency_key": idempotency_key, "activation_fee_toman": fee, "payment_status": "not_required" if not fee else "unpaid", "pasarguard_health": "verified"}))
     db.add(TenantBranding(tenant_id=tenant.id, display_name=name))
     db.add(TenantUser(tenant_id=tenant.id, user_id=user.id, status="pending", role="tenant_owner"))
-
     await _credential(db, tenant.id, "pasarguard_api_token", api_token)
     await _credential(db, tenant.id, "pasarguard_login_url", login_url)
     await _credential(db, tenant.id, "pasarguard_username", pasarguard_username)
     await _credential(db, tenant.id, "owner_telegram_id", str(submitted_telegram_id))
     await _credential(db, tenant.id, "bot_token", bot_token)
-    db.add(BotInstance(tenant_id=tenant.id, name=name, encrypted_token=box.encrypt(bot_token), masked_token=box.mask(bot_token), status="pending"))
-
+    db.add(BotInstance(tenant_id=tenant.id, name=bot_name, encrypted_token=box.encrypt(bot_token), masked_token=box.mask(bot_token), status="pending"))
     if fee:
         db.add(OnboardingPayment(tenant_id=tenant.id, user_id=user.id, amount=fee, provider="manual", status="awaiting_payment", idempotency_key=f"onboarding:{tenant.id}"))
-
-    approval = ApprovalRequest(tenant_id=tenant.id, path=path, status="pending_review" if fee == 0 else "awaiting_payment")
+    approval = ApprovalRequest(tenant_id=tenant.id, path=path, status="pending_review" if not fee else "awaiting_payment")
     db.add(approval)
     await db.flush()
     return tenant, approval
