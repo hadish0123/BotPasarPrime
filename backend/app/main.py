@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -24,6 +26,7 @@ from app.api.routers.tenants import r as tenants_router
 from app.api.routers.tickets import r as tickets_router
 from app.api.routers.users import r as users_router
 from app.api.routers.wallet import r as wallet_router
+from app.bot.runtime import runtime
 from app.core.config import settings
 
 
@@ -39,9 +42,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await runtime.start_approved_bots()
+    try:
+        yield
+    finally:
+        await runtime.shutdown_all()
+
+
 app = FastAPI(
     title=settings.app_name,
     version="1.0.0",
+    lifespan=lifespan,
     docs_url="/docs" if settings.app_env.lower() not in {"production", "prod"} else None,
     redoc_url="/redoc" if settings.app_env.lower() not in {"production", "prod"} else None,
 )
@@ -56,24 +69,9 @@ app.add_middleware(
 )
 
 for router in (
-    health_router,
-    auth_router,
-    tenants_router,
-    products_router,
-    orders_router,
-    payments_router,
-    wallet_router,
-    coupons_router,
-    tickets_router,
-    admin_router,
-    approvals_router,
-    audit_router,
-    bots_router,
-    miniapp_router,
-    referrals_router,
-    users_router,
-    settings_router,
-    notifications_router,
-    reports_router,
+    health_router, auth_router, tenants_router, products_router, orders_router,
+    payments_router, wallet_router, coupons_router, tickets_router, admin_router,
+    approvals_router, audit_router, bots_router, miniapp_router, referrals_router,
+    users_router, settings_router, notifications_router, reports_router,
 ):
     app.include_router(router, prefix="/api/v1")
