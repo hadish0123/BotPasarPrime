@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import bearer, require_permission, require_tenant_match
 from app.api.schemas import PaymentCreate
 from app.core.db import get_db
-from app.models.entities import Order, OrderItem, Service
+from app.models.entities import Order, OrderItem
 from app.services.audit import audit_sensitive
 from app.services.payments import create_payment, get_payment, transition
 from app.services.provisioning import provision_service_for_order
@@ -81,7 +81,6 @@ async def verify_payment(payment_id: int, tenant_id: int, approve: bool = True, 
     order = await db.get(Order, payment.order_id)
     if not order or order.tenant_id != tenant_id:
         raise HTTPException(404, "order_not_found")
-
     try:
         if approve:
             transition(payment, "verifying")
@@ -103,17 +102,9 @@ async def verify_payment(payment_id: int, tenant_id: int, approve: bool = True, 
         if item is None:
             raise HTTPException(500, "order_item_missing")
         try:
-            service = await provision_service_for_order(
-                db,
-                tenant_id=tenant_id,
-                order_id=order.id,
-                user_id=order.user_id,
-                duration_days=item.snapshot_duration_days,
-                quota_gb=item.snapshot_quota_gb,
-            )
+            service = await provision_service_for_order(db, tenant_id=tenant_id, order_id=order.id, user_id=order.user_id, duration_days=item.snapshot_duration_days, quota_gb=item.snapshot_quota_gb)
         except Exception:
             await db.commit()
         else:
             await db.commit()
-
     return {"id": payment.id, "order_id": order.id, "status": payment.status, "service_id": service.id if service else None, "service_status": service.status if service else ("provisioning_failed" if approve else None)}
