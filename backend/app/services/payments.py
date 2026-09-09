@@ -11,6 +11,42 @@ from app.payments_contract import PaymentStatus, validate_transition
 VALID = {x.value for x in PaymentStatus}
 
 
+class PaymentGatewayError(RuntimeError):
+    """Raised when a configured external gateway cannot be contacted."""
+
+
+class PaymentGateway:
+    name = "base"
+
+    async def create_checkout(self, *, payment: Payment, callback_url: str) -> str:
+        raise PaymentGatewayError(f"gateway_not_configured:{self.name}")
+
+    async def verify(self, *, payment: Payment) -> str:
+        raise PaymentGatewayError(f"gateway_not_configured:{self.name}")
+
+    async def refund(self, *, payment: Payment) -> str:
+        raise PaymentGatewayError(f"gateway_not_configured:{self.name}")
+
+
+class ZarinpalGateway(PaymentGateway):
+    name = "zarinpal"
+
+
+class IDPayGateway(PaymentGateway):
+    name = "idpay"
+
+
+class NextPayGateway(PaymentGateway):
+    name = "nextpay"
+
+
+GATEWAYS: dict[str, PaymentGateway] = {
+    "zarinpal": ZarinpalGateway(),
+    "idpay": IDPayGateway(),
+    "nextpay": NextPayGateway(),
+}
+
+
 def money(value) -> Decimal:
     try:
         result = Decimal(str(value))
@@ -33,32 +69,27 @@ async def create_payment(
 ) -> Payment:
     if not tenant_id:
         raise ValueError("tenant_id is required")
-
     if not order_id:
         raise ValueError("order_id is required")
-
     if not key or len(key) > 100:
         raise ValueError("invalid idempotency key")
 
     provider = (provider or "manual").strip().lower()
-
-    if provider not in {"manual", "wallet", "zarinpal", "idpay", "nextpay"}:
+    if provider not in {"manual", "wallet", *GATEWAYS}:
         raise ValueError("unsupported payment provider")
 
     amount = money(amount)
-
     old = await db.scalar(
         select(Payment).where(
             Payment.tenant_id == tenant_id,
             Payment.idempotency_key == key,
         )
     )
-
     if old:
         if Decimal(str(old.amount)) != amount:
             raise ValueError("idempotency key reused with different amount")
-        if old.order_id != order_id:
-            raise ValueError("idempotency key reused with different order")
+        if old.order_id != order_id or old.provider != provider:
+            raise ValueError("idempotency key reused with different payment")
         return old
 
     payment = Payment(
@@ -69,16 +100,13 @@ async def create_payment(
         status=PaymentStatus.CREATED.value,
         idempotency_key=key,
     )
-
     db.add(payment)
     await db.flush()
-
     return payment
 
 
 def transition(payment: Payment, status: str) -> Payment:
-    current = payment.status
-    validate_transition(current, status)
+    validate_transition(payment.status, status)
     payment.status = status
     return payment
 
