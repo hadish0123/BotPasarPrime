@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import select
 
+from app.api.deps import bearer
 from app.core.config import settings
 from app.core.db import SessionLocal
 from app.models.entities import Tenant, TenantUser, User
@@ -13,9 +14,12 @@ r = APIRouter(prefix="/auth", tags=["auth"])
 
 
 async def _telegram_user(payload: str) -> tuple[int, dict]:
+    token = settings.telegram_bot_token or settings.central_bot_token
+    if not token:
+        raise HTTPException(503, "Telegram authentication is not configured")
     ok, data = validate_init_data(
         payload,
-        settings.telegram_bot_token or settings.central_bot_token,
+        token,
         max_age=settings.telegram_init_data_max_age,
     )
     if not ok:
@@ -26,15 +30,7 @@ async def _telegram_user(payload: str) -> tuple[int, dict]:
     return int(raw_user["id"]), raw_user
 
 
-@r.post("/telegram")
-async def telegram_auth(
-    init_data: str | None = None,
-    x_telegram_init_data: str | None = Header(default=None),
-):
-    payload = x_telegram_init_data or init_data
-    if not payload:
-        raise HTTPException(400, "Telegram initData is required")
-    telegram_id, raw_user = await _telegram_user(payload)
+async def _upsert_user(telegram_id: int, raw_user: dict) -> int:
     async with SessionLocal() as db:
         user = await db.scalar(select(User).where(User.telegram_id == telegram_id))
         if user is None:
@@ -50,6 +46,19 @@ async def telegram_auth(
             user.first_name = raw_user.get("first_name")
         user_id = int(user.id)
         await db.commit()
+    return user_id
+
+
+@r.post("/telegram")
+async def telegram_auth(
+    init_data: str | None = None,
+    x_telegram_init_data: str | None = Header(default=None),
+):
+    payload = x_telegram_init_data or init_data
+    if not payload:
+        raise HTTPException(400, "Telegram initData is required")
+    telegram_id, raw_user = await _telegram_user(payload)
+    user_id = await _upsert_user(telegram_id, raw_user)
 
     claims = {
         "telegram_id": telegram_id,
@@ -73,7 +82,8 @@ async def tenant_telegram_auth(
     payload = x_telegram_init_data or init_data
     if not payload:
         raise HTTPException(400, "Telegram initData is required")
-    telegram_id, _ = await _telegram_user(payload)
+    telegram_id, raw_user = await _telegram_user(payload)
+    user_id = await _upsert_user(telegram_id, raw_user)
 
     async with SessionLocal() as db:
         tenant = await db.scalar(
@@ -83,13 +93,12 @@ async def tenant_telegram_auth(
                 Tenant.status == "active",
             )
         )
-        user = await db.scalar(select(User).where(User.telegram_id == telegram_id))
-        if not tenant or not user:
+        if not tenant:
             raise HTTPException(403, "tenant access denied")
         membership = await db.scalar(
             select(TenantUser).where(
                 TenantUser.tenant_id == tenant_id,
-                TenantUser.user_id == user.id,
+                TenantUser.user_id == user_id,
                 TenantUser.status == "active",
             )
         )
@@ -102,19 +111,32 @@ async def tenant_telegram_auth(
             "products.read",
             "orders.read",
             "orders.write",
-            "payments.write",
+            "payments.read",
             "services.read",
-            "tickets.write",
+            "tickets.read",
         ]
         claims = {
             "telegram_id": telegram_id,
-            "user_id": int(user.id),
+            "user_id": user_id,
             "tenant_id": tenant_id,
             "role": membership.role,
             "permissions": permissions,
         }
         return {
-            "access_token": create_token(int(user.id), claims),
+            "access_token": create_token(user_id, claims),
             "token_type": "bearer",
             "tenant_id": tenant_id,
         }
+
+
+@r.get("/me")
+async def me(claims=Depends(bearer)):
+    return {
+        "user_id": claims.get("user_id") or claims.get("sub"),
+        "telegram_id": claims.get("telegram_id"),
+        "username": claims.get("username"),
+        "tenant_id": claims.get("tenant_id"),
+        "role": claims.get("role"),
+        "permissions": claims.get("permissions", []),
+        "is_platform_owner": bool(claims.get("is_platform_owner")),
+    }
