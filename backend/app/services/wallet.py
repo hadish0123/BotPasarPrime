@@ -15,10 +15,12 @@ async def get_or_create_wallet(
     user_id: int,
 ):
     wallet = await db.scalar(
-        select(Wallet).where(
+        select(Wallet)
+        .where(
             Wallet.tenant_id == tenant_id,
             Wallet.user_id == user_id,
         )
+        .with_for_update()
     )
 
     if wallet:
@@ -55,7 +57,9 @@ async def post_wallet_transaction(
         raise ValueError("invalid wallet idempotency key")
 
     existing = await db.scalar(
-        select(WalletTransaction).where(WalletTransaction.idempotency_key == idempotency_key)
+        select(WalletTransaction).where(
+            WalletTransaction.idempotency_key == idempotency_key
+        )
     )
 
     if existing:
@@ -66,13 +70,15 @@ async def post_wallet_transaction(
     if wallet.tenant_id != tenant_id or wallet.user_id != user_id:
         raise ValueError("wallet tenant mismatch")
 
-    if direction == "debit" and money(wallet.balance) < amount:
+    current_balance = money(wallet.balance)
+    if direction == "debit" and current_balance < amount:
         raise ValueError("insufficient wallet balance")
 
-    if direction == "credit":
-        wallet.balance = money(wallet.balance) + amount
-    else:
-        wallet.balance = money(wallet.balance) - amount
+    wallet.balance = (
+        current_balance + amount
+        if direction == "credit"
+        else current_balance - amount
+    )
 
     transaction = WalletTransaction(
         wallet_id=wallet.id,
