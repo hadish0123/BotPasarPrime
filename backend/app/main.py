@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from app.api.deps import bearer
 from app.api.routers.admin import r as admin_router
 from app.api.routers.approvals import r as approvals_router
 from app.api.routers.audit import r as audit_router
@@ -83,6 +84,20 @@ app.add_middleware(
         "X-Telegram-Init-Data",
     ],
 )
+
+
+@app.get("/api/v1/me")
+async def current_user(claims=Depends(bearer)):
+    return {
+        "user_id": claims.get("user_id") or claims.get("sub"),
+        "telegram_id": claims.get("telegram_id"),
+        "username": claims.get("username"),
+        "tenant_id": claims.get("tenant_id"),
+        "role": claims.get("role"),
+        "permissions": claims.get("permissions", []),
+        "is_platform_owner": bool(claims.get("is_platform_owner")),
+    }
+
 
 for router in (
     health_router,
