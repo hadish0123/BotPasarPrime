@@ -47,22 +47,6 @@ export default function MiniApp() {
     localStorage.setItem('token', response.data.access_token);
   };
 
-  const loadTenant = async () => {
-    if (!tenantId) return;
-    const products = await api.get<Array<{ id: number; name: string; description?: string | null }>>(`/shop/products?tenant_id=${tenantId}`);
-    const loaded: Plan[] = [];
-    for (const product of products) {
-      const productPlans = await api.get<Array<{ id: number; name: string; price: string; duration_days: number; quota_gb: number | null }>>(`/shop/products/${product.id}/plans?tenant_id=${tenantId}`);
-      for (const plan of productPlans) loaded.push({ ...plan, product_name: product.name, description: product.description });
-    }
-    setPlans(loaded);
-    try {
-      const settings = await api.get<{ branding: Brand }>(`/settings?tenant_id=${tenantId}`);
-      setBrand(settings.branding || {});
-    } catch { /* optional branding */ }
-    await refreshUserData();
-  };
-
   const refreshUserData = async () => {
     if (!tenantId) return;
     const [w, s, o] = await Promise.all([
@@ -73,45 +57,53 @@ export default function MiniApp() {
     setWallet(w); setServices(s); setOrders(o);
   };
 
+  const loadTenant = async () => {
+    if (!tenantId) return;
+    const products = await api.get<Array<{ id: number; name: string; description?: string | null }>>(`/shop/products?tenant_id=${tenantId}`);
+    const loaded: Plan[] = [];
+    for (const product of products) {
+      const productPlans = await api.get<Array<{ id: number; name: string; price: string; duration_days: number; quota_gb: number | null }>>(`/shop/products/${product.id}/plans?tenant_id=${tenantId}`);
+      for (const plan of productPlans) loaded.push({ ...plan, product_name: product.name, description: product.description });
+    }
+    setPlans(loaded);
+    try { const settings = await api.get<{ branding: Brand }>(`/settings?tenant_id=${tenantId}`); setBrand(settings.branding || {}); } catch { /* optional branding */ }
+    await refreshUserData();
+  };
+
   useEffect(() => {
     window.Telegram?.WebApp?.ready();
     window.Telegram?.WebApp?.expand();
-    const boot = async () => {
-      try { await auth(); if (!onboardingMode) await loadTenant(); } catch (err) { setError(err instanceof Error ? err.message : 'خطای ورود'); } finally { setLoading(false); }
-    };
+    const boot = async () => { try { await auth(); if (!onboardingMode) await loadTenant(); } catch (err) { setError(err instanceof Error ? err.message : 'خطای ورود'); } finally { setLoading(false); } };
     void boot();
   }, []);
 
   const openProduct = (plan: Plan) => { setSelected(plan); setDiscount('0'); setPage('product'); };
   const applyCoupon = async () => {
     if (!selected || !coupon) return;
-    try {
-      const result = await api.post<{ discount: string }>(`/coupons/validate?tenant_id=${tenantId}&code=${encodeURIComponent(coupon)}&subtotal=${selected.price}`);
-      setDiscount(result.discount); setNotice('کد تخفیف اعمال شد.');
-    } catch (err) { setNotice(err instanceof Error ? err.message : 'کد تخفیف نامعتبر است.'); }
+    try { const result = await api.post<{ discount: string }>(`/coupons/validate?tenant_id=${tenantId}&code=${encodeURIComponent(coupon)}&subtotal=${selected.price}`); setDiscount(result.discount); setNotice('کد تخفیف اعمال شد.'); } catch (err) { setNotice(err instanceof Error ? err.message : 'کد تخفیف نامعتبر است.'); }
   };
 
   const createOrder = async () => {
-    if (!selected) return;
+    if (!selected || !tenantId) return;
     try {
       const key = `mini-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const result = await api.post<{ id: number; total: string }>('/orders', { plan_id: selected.id, coupon_code: coupon || undefined, idempotency_key: key }, key);
+      const result = await api.post<{ id: number; total: string }>(`/orders?tenant_id=${tenantId}`, { plan_id: selected.id, coupon_code: coupon || undefined, idempotency_key: key }, key);
       setOrderId(result.id); setPage('payment'); await refreshUserData();
     } catch (err) { setNotice(err instanceof Error ? err.message : 'ساخت سفارش ناموفق بود.'); }
   };
 
   const createPayment = async () => {
-    if (!orderId) return;
+    if (!orderId || !tenantId) return;
     try {
       const detail = await api.get<{ total: string }>(`/orders/${orderId}?tenant_id=${tenantId}`);
-      const result = await api.post<{ id: number }>('/payments', { order_id: orderId, amount: detail.total, provider: 'manual', idempotency_key: `pay-${orderId}` });
+      const result = await api.post<{ id: number }>(`/payments?tenant_id=${tenantId}`, { order_id: orderId, amount: detail.total, provider: 'manual', idempotency_key: `pay-${orderId}` });
       setPaymentId(result.id); setNotice('پرداخت آماده ثبت رسید است.');
     } catch (err) { setNotice(err instanceof Error ? err.message : 'ایجاد پرداخت ناموفق بود.'); }
   };
 
   const submitPayment = async (event: FormEvent) => {
     event.preventDefault();
-    if (!paymentId || !reference.trim()) return;
+    if (!paymentId || !reference.trim() || !tenantId) return;
     try { await api.post(`/payments/${paymentId}/submit?tenant_id=${tenantId}&reference=${encodeURIComponent(reference.trim())}`); setNotice('رسید ثبت شد و در انتظار تأیید است.'); await refreshUserData(); } catch (err) { setNotice(err instanceof Error ? err.message : 'ثبت رسید ناموفق بود.'); }
   };
 
@@ -138,5 +130,5 @@ export default function MiniApp() {
   const renderOrders = () => <><SectionTitle title="سفارش‌ها" onBack={() => setPage('home')}/><div className="mini-product-list">{orders.length ? orders.map((o) => <div className="mini-large-product" key={o.id}><ShoppingCart size={24}/><div><strong>سفارش #{o.id}</strong><p>{o.status}</p><b>{formatPrice(o.total)}</b></div></div>) : <div className="mini-empty"><strong>سفارشی ندارید.</strong></div>}</div></>;
   const renderSimple = (title: string, icon: JSX.Element, text: string) => <><SectionTitle title={title} onBack={() => setPage('home')}/><div className="mini-empty">{icon}<strong>{text}</strong></div></>;
 
-  return <main className="mini-app" dir="rtl" style={{ '--mini-primary': brand.primary_color || '#2563eb' } as React.CSSProperties}>{page === 'home' && renderHome()}{page === 'shop' && renderShop()}{page === 'product' && renderProduct()}{page === 'checkout' && renderCheckout()}{page === 'payment' && renderPayment()}{page === 'wallet' && renderWallet()}{page === 'services' && renderServices()}{page === 'orders' && renderOrders()}{page === 'referral' && renderSimple('دعوت دوستان', <Gift size={36}/>, 'سیستم Referral از Backend مدیریت می‌شود.')}{page === 'support' && renderSimple('پشتیبانی', <Headphones size={36}/>, 'برای ثبت و پیگیری تیکت از پنل پشتیبانی استفاده کنید.')}{page === 'notifications' && renderSimple('اعلان‌ها', <Home size={36}/>, 'اعلان‌های حساب شما در این بخش نمایش داده می‌شوند.')}{page === 'profile' && renderSimple('حساب من', <User size={36}/>, 'پروفایل Telegram شما به حساب امن متصل است.')}<nav className="mini-bottom-nav"><button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}><Home size={20}/><span>خانه</span></button><button className={page === 'shop' ? 'active' : ''} onClick={() => setPage('shop')}><ShoppingBag size={20}/><span>فروشگاه</span></button><button className={page === 'services' ? 'active' : ''} onClick={() => setPage('services')}><Package size={20}/><span>سرویس‌ها</span></button><button className={page === 'orders' ? 'active' : ''} onClick={() => setPage('orders')}><ShoppingCart size={20}/><span>سفارش‌ها</span></button><button className={page === 'profile' ? 'active' : ''} onClick={() => setPage('profile')}><User size={20}/><span>حساب</span></button></nav></main>;
+  return <main className="mini-app" dir="rtl" style={{ '--mini-primary': brand.primary_color || '#2563eb' } as React.CSSProperties}>{page === 'home' && renderHome()}{page === 'shop' && renderShop()}{page === 'product' && renderProduct()}{page === 'checkout' && renderCheckout()}{page === 'payment' && renderPayment()}{page === 'wallet' && renderWallet()}{page === 'services' && renderServices()}{page === 'orders' && renderOrders()}{page === 'referral' && renderSimple('دعوت دوستان', <Gift size={36}/>, 'سیستم Referral از Backend مدیریت می‌شود.')}{page === 'support' && renderSimple('پشتیبانی', <Headphones size={36}/>, 'برای ثبت و پیگیری تیکت از Backend استفاده کنید.')}{page === 'notifications' && renderSimple('اعلان‌ها', <Home size={36}/>, 'اعلان‌های حساب شما در این بخش نمایش داده می‌شوند.')}{page === 'profile' && renderSimple('حساب من', <User size={36}/>, 'پروفایل Telegram شما به حساب امن متصل است.')}<nav className="mini-bottom-nav"><button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}><Home size={20}/><span>خانه</span></button><button className={page === 'shop' ? 'active' : ''} onClick={() => setPage('shop')}><ShoppingBag size={20}/><span>فروشگاه</span></button><button className={page === 'services' ? 'active' : ''} onClick={() => setPage('services')}><Package size={20}/><span>سرویس‌ها</span></button><button className={page === 'orders' ? 'active' : ''} onClick={() => setPage('orders')}><ShoppingCart size={20}/><span>سفارش‌ها</span></button><button className={page === 'profile' ? 'active' : ''} onClick={() => setPage('profile')}><User size={20}/><span>حساب</span></button></nav></main>;
 }
