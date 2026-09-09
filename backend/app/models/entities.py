@@ -36,18 +36,14 @@ class Tenant(Base):
 class TenantSettings(Base):
     __tablename__ = "tenant_settings"
     id: Mapped[int] = mapped_column(primary_key=True)
-    tenant_id: Mapped[int] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), unique=True
-    )
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), unique=True)
     settings: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class TenantBranding(Base):
     __tablename__ = "tenant_branding"
     id: Mapped[int] = mapped_column(primary_key=True)
-    tenant_id: Mapped[int] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), unique=True
-    )
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), unique=True)
     logo_url: Mapped[str | None] = mapped_column(String(500))
     primary_color: Mapped[str | None] = mapped_column(String(20))
     display_name: Mapped[str | None] = mapped_column(String(150))
@@ -92,26 +88,16 @@ class Admin(Base):
 
 class Role(Base):
     __tablename__ = "roles"
-
     id: Mapped[int] = mapped_column(primary_key=True)
-    tenant_id: Mapped[int | None] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"),
-        nullable=True,
-        index=True,
-    )
+    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=now,
-        nullable=False,
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, nullable=False)
 
 
 class Permission(Base):
     __tablename__ = "permissions"
-
     id: Mapped[int] = mapped_column(primary_key=True)
     key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -252,10 +238,7 @@ class Referral(Base):
     inviter_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     invited_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     code: Mapped[str] = mapped_column(String(60))
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "invited_user_id"),
-        UniqueConstraint("tenant_id", "code"),
-    )
+    __table_args__ = (UniqueConstraint("tenant_id", "invited_user_id"), UniqueConstraint("tenant_id", "code"))
 
 
 class ReferralTransaction(Base):
@@ -275,29 +258,11 @@ class ReferralTransaction(Base):
 class TenantUserRole(Base):
     __tablename__ = "tenant_user_roles"
     id: Mapped[int] = mapped_column(primary_key=True)
-    tenant_id: Mapped[int] = mapped_column(
-        ForeignKey("tenants.id"),
-        nullable=False,
-    )
-    user_id: Mapped[int] = mapped_column(
-        ForeignKey("users.id"),
-        nullable=False,
-    )
-    role_id: Mapped[int] = mapped_column(
-        ForeignKey("roles.id"),
-        nullable=False,
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=now,
-    )
-    __table_args__ = (
-        UniqueConstraint(
-            "tenant_id",
-            "user_id",
-            "role_id",
-        ),
-    )
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    __table_args__ = (UniqueConstraint("tenant_id", "user_id", "role_id"),)
 
 
 class Service(Base):
@@ -338,6 +303,7 @@ class Notification(Base):
     title: Mapped[str] = mapped_column(String(200))
     body: Mapped[str] = mapped_column(Text)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[str] = mapped_column(String(150), unique=True)
 
 
