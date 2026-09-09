@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -84,7 +86,7 @@ async def retry_provisioning(service_id: int, tenant_id: int, claims=Depends(req
         quota_gb = metadata.get("quota_gb")
         quota_gb = int(quota_gb) if quota_gb is not None else None
         metadata["retry_count"] = retry_count + 1
-        metadata["last_retry_at"] = __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat()
+        metadata["last_retry_at"] = datetime.now(UTC).isoformat()
         service.metadata_json = metadata
         await db.flush()
         result = await provision_service_for_order(db, tenant_id=tenant_id, order_id=int(metadata["order_id"]), user_id=service.user_id, plan_id=plan_id, duration_days=duration_days, quota_gb=quota_gb)
