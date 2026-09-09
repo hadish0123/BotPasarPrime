@@ -14,7 +14,7 @@ class TenantCreate(StrictModel):
 
 
 class OnboardingCreate(StrictModel):
-    slug: str = Field(min_length=2, max_length=80, pattern=r"^(?!$).+")
+    slug: str = Field(min_length=2, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]*$")
     name: str = Field(min_length=2, max_length=150)
     path: str = Field(pattern=r"^(representative|primevpn_representative|personal_panel)$")
     pasarguard_url: str = Field(min_length=8, max_length=500)
