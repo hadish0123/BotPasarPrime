@@ -1,6 +1,11 @@
-"""3XSHOP initial schema"""
+"""3XSHOP initial schema.
+
+The initial migration creates the complete ORM schema from a clean database.
+Later migrations only add indexes or compatibility structures.
+"""
 
 from alembic import op
+
 from app.models.entities import Base
 
 revision = "0001_initial"
@@ -9,9 +14,9 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade():
+def upgrade() -> None:
     Base.metadata.create_all(op.get_bind())
 
 
-def downgrade():
+def downgrade() -> None:
     Base.metadata.drop_all(op.get_bind())
