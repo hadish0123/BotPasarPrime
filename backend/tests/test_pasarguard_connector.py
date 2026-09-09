@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from cryptography.fernet import Fernet
 
 from app.pasarguard.adapters import get_adapter
 from app.pasarguard.base import (
@@ -8,6 +9,7 @@ from app.pasarguard.base import (
     PasarGuardUnsupportedVersion,
 )
 from app.pasarguard.credentials import decrypt_credentials, encrypt_credentials, mask_credentials
+from app.security.crypto import box
 
 
 def test_adapter_version_and_paths() -> None:
@@ -35,7 +37,8 @@ def test_credentials_are_validated_and_masked() -> None:
     assert mask_credentials(credentials)["api_token"] == "***REDACTED***"
 
 
-def test_credentials_encrypt_and_round_trip() -> None:
+def test_credentials_encrypt_and_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
+    box.f = Fernet(Fernet.generate_key())
     credentials = PasarGuardCredentials(
         base_url="https://panel.example",
         api_token="secret-token",
