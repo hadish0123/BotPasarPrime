@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.api.deps import bearer
 from app.core.config import settings
 from app.core.db import SessionLocal
-from app.models.entities import Permission, Role, RolePermission, Tenant, TenantUser, User
+from app.models.entities import Permission, Role, RolePermission, Tenant, TenantUser, TenantUserRole, User
 from app.security.jwt import create_token
 from app.security.rbac import permissions_for_role
 from app.security.telegram_init_data import validate_init_data
@@ -42,17 +42,20 @@ async def _upsert_user(telegram_id: int, raw_user: dict) -> int:
     return user_id
 
 
-async def _tenant_permissions(db, tenant_id: int, user_id: int, fallback_role: str) -> set[str]:
-    role_names = {fallback_role} if fallback_role else set()
-    membership = await db.scalar(select(TenantUser).where(TenantUser.tenant_id == tenant_id, TenantUser.user_id == user_id, TenantUser.status == "active"))
-    if membership and membership.role:
-        role_names.add(membership.role)
-    permissions: set[str] = set()
+async def _tenant_roles_and_permissions(db, tenant_id: int, user_id: int) -> tuple[list[str], set[str]]:
+    result = await db.execute(
+        select(Role.name, Permission.key)
+        .join(TenantUserRole, TenantUserRole.role_id == Role.id)
+        .join(RolePermission, RolePermission.role_id == Role.id)
+        .join(Permission, Permission.id == RolePermission.permission_id)
+        .where(TenantUserRole.tenant_id == tenant_id, TenantUserRole.user_id == user_id)
+    )
+    rows = result.all()
+    role_names = list(dict.fromkeys(name for name, _ in rows))
+    permissions = {key for _, key in rows if key}
     for role_name in role_names:
         permissions.update(permissions_for_role(role_name))
-    custom_rows = await db.execute(select(Permission.key).join(RolePermission, RolePermission.permission_id == Permission.id).join(Role, Role.id == RolePermission.role_id).join(TenantUser, TenantUser.user_id == user_id).where(TenantUser.tenant_id == tenant_id, TenantUser.status == "active", Role.tenant_id == tenant_id))
-    permissions.update(row[0] for row in custom_rows.all())
-    return permissions
+    return role_names, permissions
 
 
 @r.post("/telegram")
@@ -79,11 +82,12 @@ async def tenant_telegram_auth(tenant_id: int, init_data: str | None = None, x_t
             raise HTTPException(403, "tenant access denied")
         membership = await db.scalar(select(TenantUser).where(TenantUser.tenant_id == tenant_id, TenantUser.user_id == user_id, TenantUser.status == "active"))
         if membership is None:
-            membership = TenantUser(tenant_id=tenant_id, user_id=user_id, status="active", role="customer")
+            membership = TenantUser(tenant_id=tenant_id, user_id=user_id, status="active")
             db.add(membership)
             await db.flush()
-        permissions = await _tenant_permissions(db, tenant_id, user_id, membership.role)
-        claims = {"telegram_id": telegram_id, "user_id": user_id, "tenant_id": tenant_id, "role": membership.role, "permissions": sorted(permissions | {"auth.telegram"})}
+        role_names, permissions = await _tenant_roles_and_permissions(db, tenant_id, user_id)
+        role = next((item for item in role_names if item in {"Owner", "Admin", "Finance", "Support", "Sales", "Viewer"}), role_names[0] if role_names else "customer")
+        claims = {"telegram_id": telegram_id, "user_id": user_id, "tenant_id": tenant_id, "role": role, "permissions": sorted(permissions | {"auth.telegram"})}
         return {"access_token": create_token(user_id, claims), "token_type": "bearer", "tenant_id": tenant_id}
 
 
