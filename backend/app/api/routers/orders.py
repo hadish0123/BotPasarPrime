@@ -40,6 +40,7 @@ async def create(
             user_id=int(user_id),
             plan_id=x.plan_id,
             key=x.idempotency_key,
+            coupon_code=x.coupon_code,
         )
         await db.commit()
     except ValueError as exc:
