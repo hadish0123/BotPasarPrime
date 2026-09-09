@@ -8,7 +8,15 @@ from app.api.deps import require_permission
 from app.api.schemas import ApprovalAction
 from app.bot.runtime import runtime
 from app.core.db import get_db
-from app.models.entities import ApprovalRequest, BotInstance, Tenant, TenantSettings
+from app.models.entities import (
+    ApprovalRequest,
+    AuditLog,
+    BotInstance,
+    Notification,
+    Tenant,
+    TenantSettings,
+    User,
+)
 from app.models.onboarding import OnboardingPayment
 from app.services.approvals import review_approval
 from app.services.tenant_activation import activate_approved_tenant
@@ -91,6 +99,34 @@ async def verify_onboarding_payment(
             **(settings_row.settings or {}),
             "payment_status": payment.status,
         }
+    user = await db.get(User, payment.user_id)
+    decision = "paid" if approve else "rejected"
+    if user:
+        db.add(
+            Notification(
+                tenant_id=payment.tenant_id,
+                user_id=user.id,
+                kind=f"activation_payment_{decision}",
+                title="پرداخت فعال‌سازی تأیید شد" if approve else "پرداخت فعال‌سازی رد شد",
+                body=(
+                    "پرداخت فعال‌سازی پنل شخصی شما تأیید شد."
+                    if approve
+                    else "پرداخت فعال‌سازی پنل شخصی شما رد شد."
+                ),
+                idempotency_key=f"activation-payment:{payment.id}:{decision}",
+            )
+        )
+    db.add(
+        AuditLog(
+            tenant_id=payment.tenant_id,
+            actor_type="owner",
+            actor_id=str(claims.get("sub")),
+            action="activation_payment.verify" if approve else "activation_payment.reject",
+            target_type="onboarding_payment",
+            target_id=str(payment.id),
+            metadata_json={"status": payment.status, "amount": str(payment.amount)},
+        )
+    )
     await db.commit()
     return {"id": payment.id, "status": payment.status, "tenant_id": payment.tenant_id}
 
