@@ -5,12 +5,13 @@ from enum import StrEnum
 
 from sqlalchemy import func, select
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
-from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, Application
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 from app.core.config import settings
 from app.core.db import SessionLocal
 from app.models import ApprovalRequest, BotInstance, Tenant
-from app.services.tenant_activation import activate_approved_tenant, approve_tenant, get_latest_activation, reject_tenant
+from app.services.approvals import review_approval
+from app.services.tenant_activation import activate_approved_tenant, get_latest_activation
 
 OWNER_TELEGRAM_ID = settings.owner_telegram_id or 0
 _central_application: Application | None = None
@@ -52,31 +53,15 @@ def _web_app(path: str) -> InlineKeyboardMarkup:
 
 
 def main_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("👑 ثبت نماینده PRIMEVPN", callback_data=CentralMenu.REPRESENTATIVES.value)],
-        [InlineKeyboardButton("🖥️ ساخت پنل شخصی", callback_data=CentralMenu.PERSONAL_PANEL.value)],
-        [InlineKeyboardButton("📋 وضعیت درخواست من", callback_data=CentralMenu.REQUEST_STATUS.value)],
-        [InlineKeyboardButton("💬 پشتیبانی", callback_data=CentralMenu.SUPPORT.value)],
-        [InlineKeyboardButton("❓ راهنما", callback_data=CentralMenu.HELP.value)],
-    ])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("👑 ثبت نماینده PRIMEVPN", callback_data=CentralMenu.REPRESENTATIVES.value)], [InlineKeyboardButton("🖥️ ساخت پنل شخصی", callback_data=CentralMenu.PERSONAL_PANEL.value)], [InlineKeyboardButton("📋 وضعیت درخواست من", callback_data=CentralMenu.REQUEST_STATUS.value)], [InlineKeyboardButton("💬 پشتیبانی", callback_data=CentralMenu.SUPPORT.value)], [InlineKeyboardButton("❓ راهنما", callback_data=CentralMenu.HELP.value)]])
 
 
 def owner_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 داشبورد", callback_data=CentralMenu.OWNER_DASHBOARD.value), InlineKeyboardButton("🆕 درخواست‌ها", callback_data=CentralMenu.OWNER_REQUESTS.value)],
-        [InlineKeyboardButton("🏢 Tenantها", callback_data=CentralMenu.OWNER_TENANTS.value), InlineKeyboardButton("👥 کاربران", callback_data=CentralMenu.OWNER_USERS.value)],
-        [InlineKeyboardButton("🤖 ربات‌ها", callback_data=CentralMenu.OWNER_BOTS.value), InlineKeyboardButton("💳 پرداخت‌ها", callback_data=CentralMenu.OWNER_PAYMENTS.value)],
-        [InlineKeyboardButton("🔌 اتصال‌ها", callback_data=CentralMenu.OWNER_CONNECTIONS.value), InlineKeyboardButton("📈 گزارش‌ها", callback_data=CentralMenu.OWNER_REPORTS.value)],
-        [InlineKeyboardButton("🔔 اعلان‌ها", callback_data=CentralMenu.OWNER_NOTIFICATIONS.value), InlineKeyboardButton("⚙️ تنظیمات", callback_data=CentralMenu.OWNER_SETTINGS.value)],
-        [InlineKeyboardButton("🛡️ Audit Log", callback_data=CentralMenu.OWNER_AUDIT.value)],
-    ])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("📊 داشبورد", callback_data=CentralMenu.OWNER_DASHBOARD.value), InlineKeyboardButton("🆕 درخواست‌ها", callback_data=CentralMenu.OWNER_REQUESTS.value)], [InlineKeyboardButton("🏢 Tenantها", callback_data=CentralMenu.OWNER_TENANTS.value), InlineKeyboardButton("👥 کاربران", callback_data=CentralMenu.OWNER_USERS.value)], [InlineKeyboardButton("🤖 ربات‌ها", callback_data=CentralMenu.OWNER_BOTS.value), InlineKeyboardButton("💳 پرداخت‌ها", callback_data=CentralMenu.OWNER_PAYMENTS.value)], [InlineKeyboardButton("🔌 اتصال‌ها", callback_data=CentralMenu.OWNER_CONNECTIONS.value), InlineKeyboardButton("📈 گزارش‌ها", callback_data=CentralMenu.OWNER_REPORTS.value)], [InlineKeyboardButton("🔔 اعلان‌ها", callback_data=CentralMenu.OWNER_NOTIFICATIONS.value), InlineKeyboardButton("⚙️ تنظیمات", callback_data=CentralMenu.OWNER_SETTINGS.value)], [InlineKeyboardButton("🛡️ Audit Log", callback_data=CentralMenu.OWNER_AUDIT.value)]])
 
 
 def owner_request_keyboard(request_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ تأیید", callback_data=f"owner:approve:{request_id}"), InlineKeyboardButton("❌ رد", callback_data=f"owner:reject:{request_id}")],
-        [InlineKeyboardButton("⏸ تعلیق", callback_data=f"owner:suspend:{request_id}"), InlineKeyboardButton("🟢 فعال‌سازی", callback_data=f"owner:activate:{request_id}")],
-    ])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("✅ تأیید", callback_data=f"owner:approve:{request_id}"), InlineKeyboardButton("❌ رد", callback_data=f"owner:reject:{request_id}")], [InlineKeyboardButton("⏸ تعلیق", callback_data=f"owner:suspend:{request_id}"), InlineKeyboardButton("🟢 فعال‌سازی", callback_data=f"owner:activate:{request_id}")]])
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -150,12 +135,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 if tenant is None:
                     raise ValueError("Tenant پیدا نشد")
                 if action == "owner:approve":
-                    await approve_tenant(db, approval.id)
+                    await review_approval(db, approval_id=approval.id, approved=True, reviewer_id=str(query.from_user.id), note=None)
                     await activate_approved_tenant(db, tenant.id)
                     await db.commit()
                     message = "✅ Tenant تأیید و فعال شد."
                 elif action == "owner:reject":
-                    await reject_tenant(db, approval.id, note="Rejected by platform owner")
+                    await review_approval(db, approval_id=approval.id, approved=False, reviewer_id=str(query.from_user.id), note="Rejected by platform owner")
                     await db.commit()
                     message = "❌ درخواست رد شد."
                 elif action == "owner:activate":
@@ -186,10 +171,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data == CentralMenu.REQUEST_STATUS.value:
         async with SessionLocal() as db:
             result = await get_latest_activation(db, query.from_user.id)
-        if not result:
-            text = "📋 هنوز درخواست فعالی برای شما ثبت نشده است."
-        else:
-            text = f"📋 وضعیت درخواست\n\n🏢 {result['tenant_name']}\n📌 Tenant: {result['tenant_status']}\n📝 Approval: {result['approval_status']}"
+        text = "📋 هنوز درخواست فعالی برای شما ثبت نشده است." if not result else f"📋 وضعیت درخواست\n\n🏢 {result['tenant_name']}\n📌 Tenant: {result['tenant_status']}\n📝 Approval: {result['approval_status']}"
         await query.edit_message_text(text, reply_markup=main_menu())
     elif data == CentralMenu.SUPPORT.value:
         await query.edit_message_text("💬 پشتیبانی\n\nدرخواست خود را از طریق بخش تیکت ثبت کنید.", reply_markup=main_menu())
