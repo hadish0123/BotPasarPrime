@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_permission
 from app.api.schemas import ApprovalAction
+from app.bot.runtime import runtime
 from app.core.db import get_db
-from app.models.entities import ApprovalRequest, Tenant, TenantSettings
+from app.models.entities import ApprovalRequest, BotInstance, Tenant, TenantSettings
 from app.models.onboarding import OnboardingPayment
 from app.services.approvals import review_approval
 
@@ -81,15 +82,14 @@ async def verify_onboarding_payment(
     if payment.status != "submitted":
         raise HTTPException(409, "onboarding payment is not awaiting verification")
     payment.status = "paid" if approve else "rejected"
-    if approve:
-        settings_row = await db.scalar(
-            select(TenantSettings).where(TenantSettings.tenant_id == payment.tenant_id)
-        )
-        if settings_row:
-            settings_row.settings = {
-                **(settings_row.settings or {}),
-                "payment_status": "paid",
-            }
+    settings_row = await db.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == payment.tenant_id)
+    )
+    if settings_row:
+        settings_row.settings = {
+            **(settings_row.settings or {}),
+            "payment_status": "paid" if approve else "rejected",
+        }
     await db.commit()
     return {"id": payment.id, "status": payment.status, "tenant_id": payment.tenant_id}
 
@@ -144,4 +144,23 @@ async def act(
     except ValueError as exc:
         await db.rollback()
         raise HTTPException(400, str(exc)) from None
-    return {"id": approval.id, "status": approval.status, "tenant_id": approval.tenant_id}
+
+    bot_status = None
+    if x.approved:
+        bot = await db.scalar(
+            select(BotInstance).where(BotInstance.tenant_id == approval.tenant_id)
+        )
+        if bot is not None:
+            try:
+                await runtime.start_bot(bot)
+            except Exception:
+                bot_status = "failed"
+            else:
+                bot_status = "running"
+
+    return {
+        "id": approval.id,
+        "status": approval.status,
+        "tenant_id": approval.tenant_id,
+        "bot_status": bot_status,
+    }
