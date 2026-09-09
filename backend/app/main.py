@@ -1,5 +1,9 @@
-from fastapi import FastAPI
+from __future__ import annotations
+
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.routers.admin import r as admin_router
 from app.api.routers.approvals import r as approvals_router
@@ -22,30 +26,54 @@ from app.api.routers.users import r as users_router
 from app.api.routers.wallet import r as wallet_router
 from app.core.config import settings
 
-app = FastAPI(title=settings.app_name, version="1.0.0")
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        if settings.app_env.lower() in {"production", "prod"}:
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return response
+
+
+app = FastAPI(
+    title=settings.app_name,
+    version="1.0.0",
+    docs_url="/docs" if settings.app_env.lower() not in {"production", "prod"} else None,
+    redoc_url="/redoc" if settings.app_env.lower() not in {"production", "prod"} else None,
+)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[x.strip() for x in settings.cors_origins.split(",")],
+    allow_origins=[x.strip() for x in settings.cors_origins.split(",") if x.strip()],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Telegram-Init-Data"],
 )
-app.include_router(health_router, prefix="/api/v1")
-app.include_router(auth_router, prefix="/api/v1")
-app.include_router(tenants_router, prefix="/api/v1")
-app.include_router(products_router, prefix="/api/v1")
-app.include_router(orders_router, prefix="/api/v1")
-app.include_router(payments_router, prefix="/api/v1")
-app.include_router(wallet_router, prefix="/api/v1")
-app.include_router(coupons_router, prefix="/api/v1")
-app.include_router(tickets_router, prefix="/api/v1")
-app.include_router(admin_router, prefix="/api/v1")
-app.include_router(approvals_router, prefix="/api/v1")
-app.include_router(audit_router, prefix="/api/v1")
-app.include_router(bots_router, prefix="/api/v1")
-app.include_router(miniapp_router, prefix="/api/v1")
-app.include_router(referrals_router, prefix="/api/v1")
-app.include_router(users_router, prefix="/api/v1")
-app.include_router(settings_router, prefix="/api/v1")
-app.include_router(notifications_router, prefix="/api/v1")
-app.include_router(reports_router, prefix="/api/v1")
+
+for router in (
+    health_router,
+    auth_router,
+    tenants_router,
+    products_router,
+    orders_router,
+    payments_router,
+    wallet_router,
+    coupons_router,
+    tickets_router,
+    admin_router,
+    approvals_router,
+    audit_router,
+    bots_router,
+    miniapp_router,
+    referrals_router,
+    users_router,
+    settings_router,
+    notifications_router,
+    reports_router,
+):
+    app.include_router(router, prefix="/api/v1")
