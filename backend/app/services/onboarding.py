@@ -15,17 +15,10 @@ from app.models.entities import (
     TenantSettings,
     User,
 )
+from app.models.onboarding import OnboardingPayment
 from app.security.crypto import box
 
 VALID_PATHS = {"primevpn_representative", "personal_panel"}
-
-CREDENTIAL_KINDS = {
-    "pasarguard_api_token",
-    "pasarguard_login_url",
-    "pasarguard_username",
-    "owner_telegram_id",
-    "bot_token",
-}
 
 
 def normalize_slug(value: str) -> str:
@@ -75,7 +68,6 @@ async def get_user(
 ) -> User:
     result = await db.execute(select(User).where(User.telegram_id == telegram_id))
     user = result.scalar_one_or_none()
-
     if user is None:
         user = User(
             telegram_id=telegram_id,
@@ -87,7 +79,6 @@ async def get_user(
     else:
         user.username = username
         user.first_name = first_name
-
     return user
 
 
@@ -108,7 +99,6 @@ async def create_onboarding(
 ) -> tuple[Tenant, ApprovalRequest]:
     if path not in VALID_PATHS:
         raise ValueError("invalid onboarding path")
-
     if submitted_telegram_id != telegram_id:
         raise ValueError("telegram id mismatch")
 
@@ -116,16 +106,13 @@ async def create_onboarding(
     login_url = validate_url(login_url)
     pasarguard_username = pasarguard_username.strip()
     bot_token = validate_bot_token(bot_token)
-
     if len(api_token) < 8:
         raise ValueError("invalid api token")
-
     if not pasarguard_username:
         raise ValueError("pasarguard username is required")
 
     slug = normalize_slug(slug)
     name = name.strip()
-
     if not name:
         raise ValueError("tenant name is required")
 
@@ -137,7 +124,8 @@ async def create_onboarding(
     )
     if existing.scalar_one_or_none() is not None:
         raise ValueError("tenant slug already exists")
-    await get_user(
+
+    user = await get_user(
         db,
         telegram_id=telegram_id,
         username=username,
@@ -152,61 +140,24 @@ async def create_onboarding(
     db.add(tenant)
     await db.flush()
 
+    fee = activation_fee(path)
     db.add(
         TenantSettings(
             tenant_id=tenant.id,
             settings={
                 "onboarding_path": path,
-                "activation_fee_toman": (
-                    0 if path == "primevpn_representative" else int(settings.activation_fee_toman)
-                ),
-                "payment_status": (
-                    "not_required" if path == "primevpn_representative" else "unpaid"
-                ),
+                "activation_fee_toman": fee,
+                "payment_status": "not_required" if fee == 0 else "unpaid",
             },
         )
     )
+    db.add(TenantBranding(tenant_id=tenant.id, display_name=name))
 
-    db.add(
-        TenantBranding(
-            tenant_id=tenant.id,
-            display_name=name,
-        )
-    )
-
-    await _credential(
-        db,
-        tenant.id,
-        "pasarguard_api_token",
-        api_token,
-    )
-    await _credential(
-        db,
-        tenant.id,
-        "pasarguard_login_url",
-        login_url,
-    )
-    await _credential(
-        db,
-        tenant.id,
-        "pasarguard_username",
-        pasarguard_username,
-    )
-    await _credential(
-        db,
-        tenant.id,
-        "owner_telegram_id",
-        str(submitted_telegram_id),
-    )
-
-    db.add(
-        TenantCredential(
-            tenant_id=tenant.id,
-            kind="bot_token",
-            encrypted_value=box.encrypt(bot_token),
-            masked_value=box.mask(bot_token),
-        )
-    )
+    await _credential(db, tenant.id, "pasarguard_api_token", api_token)
+    await _credential(db, tenant.id, "pasarguard_login_url", login_url)
+    await _credential(db, tenant.id, "pasarguard_username", pasarguard_username)
+    await _credential(db, tenant.id, "owner_telegram_id", str(submitted_telegram_id))
+    await _credential(db, tenant.id, "bot_token", bot_token)
 
     db.add(
         BotInstance(
@@ -218,16 +169,72 @@ async def create_onboarding(
         )
     )
 
+    if fee:
+        db.add(
+            OnboardingPayment(
+                tenant_id=tenant.id,
+                user_id=user.id,
+                amount=fee,
+                provider="manual",
+                status="awaiting_payment",
+                idempotency_key=f"onboarding:{tenant.id}",
+            )
+        )
+
     approval = ApprovalRequest(
         tenant_id=tenant.id,
         path=path,
-        status="pending_review",
+        status="pending_review" if fee == 0 else "awaiting_payment",
     )
     db.add(approval)
-
     await db.flush()
-
     return tenant, approval
+
+
+async def submit_activation_payment(
+    db: AsyncSession,
+    *,
+    payment_id: int,
+    telegram_id: int,
+    reference: str,
+) -> OnboardingPayment:
+    user = await db.scalar(select(User).where(User.telegram_id == telegram_id))
+    if user is None:
+        raise ValueError("user not found")
+    payment = await db.scalar(
+        select(OnboardingPayment).where(
+            OnboardingPayment.id == payment_id,
+            OnboardingPayment.user_id == user.id,
+        )
+    )
+    if payment is None:
+        raise ValueError("onboarding payment not found")
+    if payment.status != "awaiting_payment":
+        raise ValueError("onboarding payment is not awaiting payment")
+    payment.reference = reference.strip()
+    payment.status = "submitted"
+
+    approval = await db.scalar(
+        select(ApprovalRequest).where(
+            ApprovalRequest.tenant_id == payment.tenant_id,
+            ApprovalRequest.status == "awaiting_payment",
+        )
+    )
+    if approval:
+        approval.status = "pending_review"
+    tenant = await db.get(Tenant, payment.tenant_id)
+    if tenant:
+        tenant.status = "pending_review"
+    settings_row = await db.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == payment.tenant_id)
+    )
+    if settings_row:
+        settings_row.settings = {
+            **(settings_row.settings or {}),
+            "payment_status": "submitted",
+        }
+    await db.flush()
+    return payment
 
 
 def activation_fee(path: str) -> int:
