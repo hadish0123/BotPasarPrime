@@ -28,6 +28,7 @@ from app.api.routers.tenants import r as tenants_router
 from app.api.routers.tickets import r as tickets_router
 from app.api.routers.users import r as users_router
 from app.api.routers.wallet import r as wallet_router
+from app.bot.central import start_central_bot, stop_central_bot
 from app.bot.runtime import runtime
 from app.core.config import settings
 
@@ -40,7 +41,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("Referrer-Policy", "no-referrer")
         response.headers.setdefault(
             "Permissions-Policy",
-            "camera=(), microphone=(), geolocation=(),",
+            "camera=(), microphone=(), geolocation=()",
         )
         if settings.app_env.lower() in {"production", "prod"}:
             response.headers.setdefault(
@@ -53,11 +54,18 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.validate_runtime()
-    await runtime.start_approved_bots()
+    is_production = settings.app_env.lower() in {"production", "prod"}
+    if is_production and settings.tenant_bots_enabled:
+        await runtime.start_approved_bots()
+    if is_production and settings.central_bot_enabled:
+        await start_central_bot()
     try:
         yield
     finally:
-        await runtime.shutdown_all()
+        if is_production and settings.central_bot_enabled:
+            await stop_central_bot()
+        if is_production and settings.tenant_bots_enabled:
+            await runtime.shutdown_all()
 
 
 app = FastAPI(
@@ -71,19 +79,10 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        item.strip()
-        for item in settings.cors_origins.split(",")
-        if item.strip()
-    ],
+    allow_origins=[item.strip() for item in settings.cors_origins.split(",") if item.strip()],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "Idempotency-Key",
-        "X-Telegram-Init-Data",
-    ],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Telegram-Init-Data"],
 )
 
 
