@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
 import { api } from "../api";
+import "./products-admin.css";
 
 type Product = {
   id: number;
@@ -34,10 +35,13 @@ export default function Products() {
       setError("شناسه Tenant را وارد کنید.");
       return;
     }
+    localStorage.setItem("tenant_id", tenantId);
     setLoading(true);
     setError("");
     try {
-      const rows = await api.get<Product[]>(`/shop/products?tenant_id=${encodeURIComponent(tenantId)}`);
+      const rows = await api.get<Product[]>(
+        `/shop/products?tenant_id=${encodeURIComponent(tenantId)}`,
+      );
       setProducts(rows);
       const entries = await Promise.all(
         rows.map(async (product) => {
@@ -78,13 +82,21 @@ export default function Products() {
       <div className="card toolbar">
         <label>
           Tenant ID
-          <input value={tenantId} onChange={(event) => setTenantId(event.target.value)} inputMode="numeric" />
+          <input
+            value={tenantId}
+            onChange={(event) => setTenantId(event.target.value)}
+            inputMode="numeric"
+          />
         </label>
         <label className="grow">
           جستجو
           <div className="input-icon">
             <Search size={16} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="نام محصول یا دسته‌بندی" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="نام محصول یا دسته‌بندی"
+            />
           </div>
         </label>
       </div>
@@ -100,7 +112,9 @@ export default function Products() {
             <div className="row-between">
               <div>
                 <h3>{product.name}</h3>
-                <span className="muted">#{product.id} · {product.category || "بدون دسته"}</span>
+                <span className="muted">
+                  #{product.id} · {product.category || "بدون دسته"}
+                </span>
               </div>
               <span className="badge">فعال</span>
             </div>
@@ -109,7 +123,9 @@ export default function Products() {
               {(plans[product.id] || []).map((plan) => (
                 <div className="plan" key={plan.id}>
                   <strong>{plan.name}</strong>
-                  <span>{plan.price} · {plan.duration_days} روز · {plan.quota_gb ?? "∞"} GB</span>
+                  <span>
+                    {plan.price} · {plan.duration_days} روز · {plan.quota_gb ?? "∞"} GB
+                  </span>
                 </div>
               ))}
             </div>
