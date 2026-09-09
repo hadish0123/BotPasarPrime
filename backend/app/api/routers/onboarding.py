@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import bearer
 from app.api.schemas import OnboardingCreate, OnboardingPaymentSubmit
 from app.core.config import settings
 from app.core.db import get_db
+from app.models.onboarding import OnboardingPayment
 from app.services.onboarding import activation_fee, create_onboarding, submit_activation_payment
 
 r = APIRouter(prefix="/onboarding", tags=["onboarding"])
@@ -20,27 +22,13 @@ async def register_tenant(payload: OnboardingCreate, claims=Depends(bearer), db:
         raise HTTPException(401, "telegram_identity_required")
     path = "primevpn_representative" if payload.path == "representative" else payload.path
     try:
-        tenant, approval = await create_onboarding(
-            db,
-            telegram_id=int(telegram_id),
-            username=claims.get("username"),
-            first_name=claims.get("first_name"),
-            slug=payload.slug,
-            name=payload.name,
-            path=path,
-            api_token=payload.pasarguard_api_token,
-            login_url=payload.pasarguard_url,
-            pasarguard_username=payload.pasarguard_username or "",
-            submitted_telegram_id=int(telegram_id),
-            bot_token=payload.bot_token,
-            idempotency_key=payload.idempotency_key,
-            bot_name=payload.bot_name,
-        )
+        tenant, approval = await create_onboarding(db, telegram_id=int(telegram_id), username=claims.get("username"), first_name=claims.get("first_name"), slug=payload.slug, name=payload.name, path=path, api_token=payload.pasarguard_api_token, login_url=payload.pasarguard_url, pasarguard_username=payload.pasarguard_username or "", submitted_telegram_id=int(telegram_id), bot_token=payload.bot_token, idempotency_key=payload.idempotency_key, bot_name=payload.bot_name)
+        payment = await db.scalar(select(OnboardingPayment).where(OnboardingPayment.tenant_id == tenant.id).order_by(OnboardingPayment.id.desc()))
         await db.commit()
     except ValueError as exc:
         await db.rollback()
         raise HTTPException(400, str(exc)) from None
-    return {"tenant_id": tenant.id, "approval_id": approval.id, "status": tenant.status, "path": approval.path, "activation_fee_toman": activation_fee(approval.path), "configured_activation_fee_toman": int(settings.activation_fee_toman), "pasarguard_health": "verified"}
+    return {"tenant_id": tenant.id, "approval_id": approval.id, "status": tenant.status, "path": approval.path, "activation_fee_toman": activation_fee(approval.path), "configured_activation_fee_toman": int(settings.activation_fee_toman), "activation_payment_id": payment.id if payment else None, "activation_payment_status": payment.status if payment else "not_required", "pasarguard_health": "verified"}
 
 
 @r.post("/payments/{payment_id}/submit")
