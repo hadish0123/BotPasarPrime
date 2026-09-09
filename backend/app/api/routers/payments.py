@@ -4,11 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import bearer, require_tenant_match
+from app.api.deps import bearer, require_permission, require_tenant_match
 from app.api.schemas import PaymentCreate
 from app.core.db import get_db
 from app.models.entities import Order
-from app.services.payments import create_payment, get_payment
+from app.services.audit import audit_sensitive
+from app.services.payments import create_payment, get_payment, transition
 
 r = APIRouter(prefix="/payments", tags=["payments"])
 
@@ -115,8 +116,6 @@ async def submit_payment(
     if not reference or len(reference.strip()) > 150:
         raise HTTPException(400, "invalid_reference")
     try:
-        from app.services.payments import transition
-
         transition(payment, "submitted")
         payment.reference = reference.strip()
         await db.commit()
@@ -124,3 +123,55 @@ async def submit_payment(
     except ValueError as exc:
         await db.rollback()
         raise HTTPException(409, str(exc)) from None
+
+
+@r.post("/{payment_id}/verify")
+async def verify_payment(
+    payment_id: int,
+    tenant_id: int,
+    approve: bool = True,
+    claims=Depends(require_permission("payments.verify")),
+    db: AsyncSession = Depends(get_db),
+):
+    require_tenant_match(tenant_id, claims)
+    payment = await get_payment(
+        db=db,
+        tenant_id=tenant_id,
+        payment_id=payment_id,
+    )
+    if not payment:
+        raise HTTPException(404, "payment_not_found")
+    order = await db.get(Order, payment.order_id)
+    if not order or order.tenant_id != tenant_id:
+        raise HTTPException(404, "order_not_found")
+
+    try:
+        if approve:
+            transition(payment, "verifying")
+            transition(payment, "paid")
+            order.status = "paid"
+            action = "payment.verify"
+        else:
+            transition(payment, "rejected")
+            action = "payment.reject"
+
+        audit_sensitive(
+            db,
+            action=action,
+            tenant_id=tenant_id,
+            actor_type="admin",
+            actor_id=claims.get("user_id") or claims.get("sub"),
+            target_type="payment",
+            target_id=payment.id,
+            metadata={"order_id": order.id, "status": payment.status},
+        )
+        await db.commit()
+    except ValueError as exc:
+        await db.rollback()
+        raise HTTPException(409, str(exc)) from None
+
+    return {
+        "id": payment.id,
+        "order_id": order.id,
+        "status": payment.status,
+    }
