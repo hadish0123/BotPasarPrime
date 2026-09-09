@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     rate_limit_per_minute: int = 120
     telegram_init_data_max_age: int = 300
+    central_bot_enabled: bool = True
+    tenant_bots_enabled: bool = True
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",
