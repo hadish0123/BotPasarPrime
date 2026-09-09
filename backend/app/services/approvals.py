@@ -3,12 +3,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.entities import (
-    ApprovalRequest,
-    AuditLog,
-    BotInstance,
-    Tenant,
-)
+from app.models.entities import ApprovalRequest, AuditLog, BotInstance, Tenant
+from app.models.onboarding import OnboardingPayment
 
 TRANSITIONS = {
     "draft": {"awaiting_payment", "pending_review", "rejected"},
@@ -36,20 +32,25 @@ async def review_approval(
         select(ApprovalRequest).where(ApprovalRequest.id == approval_id).with_for_update()
     )
     approval = result.scalar_one_or_none()
-
     if approval is None:
         raise ValueError("approval not found")
-
     if approval.status != "pending_review":
         raise ValueError("approval is not actionable")
 
     tenant = await db.get(Tenant, approval.tenant_id)
-
     if tenant is None or tenant.is_deleted:
         raise ValueError("tenant not found")
 
-    target = "approved" if approved else "rejected"
+    if approved and approval.path == "personal_panel":
+        payment = await db.scalar(
+            select(OnboardingPayment).where(
+                OnboardingPayment.tenant_id == tenant.id,
+            )
+        )
+        if payment is None or payment.status != "paid":
+            raise ValueError("activation payment must be verified before approval")
 
+    target = "approved" if approved else "rejected"
     if not valid_transition(approval.status, target):
         raise ValueError("invalid approval transition")
 
@@ -59,14 +60,12 @@ async def review_approval(
 
     if approved:
         tenant.status = "approved"
-
         result = await db.execute(select(BotInstance).where(BotInstance.tenant_id == tenant.id))
         bot = result.scalar_one_or_none()
         if bot:
             bot.status = "approved"
     else:
         tenant.status = "rejected"
-
         result = await db.execute(select(BotInstance).where(BotInstance.tenant_id == tenant.id))
         bot = result.scalar_one_or_none()
         if bot:
@@ -80,12 +79,8 @@ async def review_approval(
             action="onboarding.approved" if approved else "onboarding.rejected",
             target_type="approval_request",
             target_id=str(approval.id),
-            metadata_json={
-                "path": approval.path,
-                "note": note,
-            },
+            metadata_json={"path": approval.path, "note": note},
         )
     )
-
     await db.flush()
     return approval
