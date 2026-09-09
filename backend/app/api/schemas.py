@@ -35,6 +35,13 @@ class ProductCreate(StrictModel):
     category: str | None = Field(default=None, max_length=100)
 
 
+class ProductUpdate(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=150)
+    description: str | None = Field(default=None, max_length=5000)
+    category: str | None = Field(default=None, max_length=100)
+    active: bool | None = None
+
+
 class PlanCreate(StrictModel):
     name: str = Field(min_length=1, max_length=120)
     price: Decimal = Field(ge=0, max_digits=18, decimal_places=2)
@@ -42,6 +49,16 @@ class PlanCreate(StrictModel):
     quota_gb: int | None = Field(default=None, ge=0, le=10000000)
     discount_kind: str = Field(default="none", pattern=r"^(none|fixed|percent)$")
     discount_value: Decimal = Field(default=Decimal("0"), ge=0, max_digits=18, decimal_places=2)
+
+
+class PlanUpdate(StrictModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    price: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    duration_days: int | None = Field(default=None, gt=0, le=3650)
+    quota_gb: int | None = Field(default=None, ge=0, le=10000000)
+    discount_kind: str | None = Field(default=None, pattern=r"^(none|fixed|percent)$")
+    discount_value: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=2)
+    active: bool | None = None
 
 
 class OrderCreate(StrictModel):
