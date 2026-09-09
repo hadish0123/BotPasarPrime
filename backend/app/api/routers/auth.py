@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.api.deps import bearer
 from app.core.config import settings
 from app.core.db import SessionLocal
-from app.models.entities import Role, RolePermission, Permission, Tenant, TenantUser, User
+from app.models.entities import Permission, Role, RolePermission, Tenant, TenantUser, User
 from app.security.jwt import create_token
 from app.security.rbac import permissions_for_role
 from app.security.telegram_init_data import validate_init_data
@@ -43,35 +43,14 @@ async def _upsert_user(telegram_id: int, raw_user: dict) -> int:
 
 
 async def _tenant_permissions(db, tenant_id: int, user_id: int, fallback_role: str) -> set[str]:
-    role_names = set()
-    membership = await db.scalar(
-        select(TenantUser).where(
-            TenantUser.tenant_id == tenant_id,
-            TenantUser.user_id == user_id,
-            TenantUser.status == "active",
-        )
-    )
+    role_names = {fallback_role} if fallback_role else set()
+    membership = await db.scalar(select(TenantUser).where(TenantUser.tenant_id == tenant_id, TenantUser.user_id == user_id, TenantUser.status == "active"))
     if membership and membership.role:
         role_names.add(membership.role)
-    if fallback_role:
-        role_names.add(fallback_role)
-
     permissions: set[str] = set()
     for role_name in role_names:
         permissions.update(permissions_for_role(role_name))
-
-    # Tenant-scoped custom roles are resolved from the persisted RBAC graph.
-    custom_rows = await db.execute(
-        select(Permission.key)
-        .join(RolePermission, RolePermission.permission_id == Permission.id)
-        .join(Role, Role.id == RolePermission.role_id)
-        .join(TenantUser, TenantUser.user_id == user_id)
-        .where(
-            TenantUser.tenant_id == tenant_id,
-            TenantUser.status == "active",
-            Role.tenant_id == tenant_id,
-        )
-    )
+    custom_rows = await db.execute(select(Permission.key).join(RolePermission, RolePermission.permission_id == Permission.id).join(Role, Role.id == RolePermission.role_id).join(TenantUser, TenantUser.user_id == user_id).where(TenantUser.tenant_id == tenant_id, TenantUser.status == "active", Role.tenant_id == tenant_id))
     permissions.update(row[0] for row in custom_rows.all())
     return permissions
 
@@ -83,10 +62,7 @@ async def telegram_auth(init_data: str | None = None, x_telegram_init_data: str 
         raise HTTPException(400, "Telegram initData is required")
     telegram_id, raw_user = await _telegram_user(payload)
     user_id = await _upsert_user(telegram_id, raw_user)
-    return {
-        "access_token": create_token(user_id, {"telegram_id": telegram_id, "user_id": user_id, "username": raw_user.get("username"), "tenant_id": None, "permissions": ["auth.telegram"]}),
-        "token_type": "bearer",
-    }
+    return {"access_token": create_token(user_id, {"telegram_id": telegram_id, "user_id": user_id, "username": raw_user.get("username"), "tenant_id": None, "permissions": ["auth.telegram"]}), "token_type": "bearer"}
 
 
 @r.post("/telegram/{tenant_id}")
@@ -102,8 +78,10 @@ async def tenant_telegram_auth(tenant_id: int, init_data: str | None = None, x_t
         if not tenant:
             raise HTTPException(403, "tenant access denied")
         membership = await db.scalar(select(TenantUser).where(TenantUser.tenant_id == tenant_id, TenantUser.user_id == user_id, TenantUser.status == "active"))
-        if not membership:
-            raise HTTPException(403, "tenant access denied")
+        if membership is None:
+            membership = TenantUser(tenant_id=tenant_id, user_id=user_id, status="active", role="customer")
+            db.add(membership)
+            await db.flush()
         permissions = await _tenant_permissions(db, tenant_id, user_id, membership.role)
         claims = {"telegram_id": telegram_id, "user_id": user_id, "tenant_id": tenant_id, "role": membership.role, "permissions": sorted(permissions | {"auth.telegram"})}
         return {"access_token": create_token(user_id, claims), "token_type": "bearer", "tenant_id": tenant_id}
