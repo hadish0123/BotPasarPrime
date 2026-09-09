@@ -1,0 +1,20 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
+
+def test_migration_chain_has_single_root_and_expected_head() -> None:
+    backend = Path(__file__).resolve().parents[1]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("script_location", str(backend / "migrations"))
+    scripts = ScriptDirectory.from_config(config)
+
+    revisions = list(scripts.walk_revisions())
+    roots = [revision for revision in revisions if revision.down_revision is None]
+    heads = scripts.get_heads()
+
+    assert [revision.revision for revision in roots] == ["0001_initial"]
+    assert heads == ["0003_page8_missing_tables"]
