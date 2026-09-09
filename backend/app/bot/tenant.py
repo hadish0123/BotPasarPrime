@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.db import SessionLocal
 from app.models.entities import (
     Order,
+    Permission,
     Plan,
     Product,
     Referral,
@@ -23,7 +24,6 @@ from app.models.entities import (
     TenantUserRole,
     User,
     Wallet,
-    Permission,
 )
 
 
@@ -86,33 +86,28 @@ def assert_tenant_access(contract: TenantBotContract, requested_tenant_id: int) 
 
 
 def user_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("🛍️ فروشگاه", callback_data=TenantBotSection.STORE.value), InlineKeyboardButton("📦 پلن‌ها", callback_data=TenantBotSection.PLANS.value)],
-            [InlineKeyboardButton("🛒 خرید", callback_data=TenantBotSection.PURCHASE.value), InlineKeyboardButton("💳 پرداخت", callback_data=TenantBotSection.PAYMENTS.value)],
-            [InlineKeyboardButton("💰 کیف پول", callback_data=TenantBotSection.WALLET.value), InlineKeyboardButton("📋 سفارش‌های من", callback_data=TenantBotSection.MY_ORDERS.value)],
-            [InlineKeyboardButton("🖥️ سرویس‌های من", callback_data=TenantBotSection.MY_SERVICES.value), InlineKeyboardButton("🔄 تمدید", callback_data=TenantBotSection.RENEW.value)],
-            [InlineKeyboardButton("⏰ انقضا", callback_data=TenantBotSection.EXPIRY.value), InlineKeyboardButton("🎟️ کد تخفیف", callback_data=TenantBotSection.COUPON.value)],
-            [InlineKeyboardButton("🎁 دعوت دوستان", callback_data=TenantBotSection.REFERRAL.value), InlineKeyboardButton("💬 پشتیبانی", callback_data=TenantBotSection.SUPPORT.value)],
-            [InlineKeyboardButton("❓ FAQ", callback_data=TenantBotSection.FAQ.value), InlineKeyboardButton("🚀 Mini App", callback_data=TenantBotSection.MINI_APP.value)],
-        ]
-    )
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🛍️ فروشگاه", callback_data=TenantBotSection.STORE.value), InlineKeyboardButton("📦 پلن‌ها", callback_data=TenantBotSection.PLANS.value)],
+        [InlineKeyboardButton("🛒 خرید", callback_data=TenantBotSection.PURCHASE.value), InlineKeyboardButton("💳 پرداخت", callback_data=TenantBotSection.PAYMENTS.value)],
+        [InlineKeyboardButton("💰 کیف پول", callback_data=TenantBotSection.WALLET.value), InlineKeyboardButton("📋 سفارش‌های من", callback_data=TenantBotSection.MY_ORDERS.value)],
+        [InlineKeyboardButton("🖥️ سرویس‌های من", callback_data=TenantBotSection.MY_SERVICES.value), InlineKeyboardButton("🔄 تمدید", callback_data=TenantBotSection.RENEW.value)],
+        [InlineKeyboardButton("⏰ انقضا", callback_data=TenantBotSection.EXPIRY.value), InlineKeyboardButton("🎟️ کد تخفیف", callback_data=TenantBotSection.COUPON.value)],
+        [InlineKeyboardButton("🎁 دعوت دوستان", callback_data=TenantBotSection.REFERRAL.value), InlineKeyboardButton("💬 پشتیبانی", callback_data=TenantBotSection.SUPPORT.value)],
+        [InlineKeyboardButton("❓ FAQ", callback_data=TenantBotSection.FAQ.value), InlineKeyboardButton("🚀 Mini App", callback_data=TenantBotSection.MINI_APP.value)],
+    ])
 
 
 def admin_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("📊 داشبورد", callback_data=TenantAdminSection.DASHBOARD.value), InlineKeyboardButton("👥 کاربران", callback_data=TenantAdminSection.USERS.value)],
-            [InlineKeyboardButton("🛍️ محصولات", callback_data=TenantAdminSection.PRODUCTS.value), InlineKeyboardButton("📋 سفارش‌ها", callback_data=TenantAdminSection.ORDERS.value)],
-            [InlineKeyboardButton("💳 پرداخت‌ها", callback_data=TenantAdminSection.PAYMENTS.value), InlineKeyboardButton("💰 کیف پول", callback_data=TenantAdminSection.WALLET.value)],
-            [InlineKeyboardButton("🎟️ کوپن", callback_data=TenantAdminSection.COUPONS.value), InlineKeyboardButton("🎁 Referral", callback_data=TenantAdminSection.REFERRAL.value)],
-            [InlineKeyboardButton("🖥️ سرویس‌ها", callback_data=TenantAdminSection.SERVICES.value), InlineKeyboardButton("📈 گزارش‌ها", callback_data=TenantAdminSection.REPORTS.value)],
-            [InlineKeyboardButton("📢 پیام همگانی", callback_data=TenantAdminSection.BROADCAST.value), InlineKeyboardButton("🎫 تیکت‌ها", callback_data=TenantAdminSection.TICKETS.value)],
-            [InlineKeyboardButton("🎨 برند", callback_data=TenantAdminSection.BRANDING.value), InlineKeyboardButton("👑 مدیران", callback_data=TenantAdminSection.ADMINS.value)],
-            [InlineKeyboardButton("🚀 پنل کامل Mini App", web_app=WebAppInfo(url=f"{settings.mini_app_url.rstrip('/')}/?tenant_id={{tenant_id}}&page=admin"))],
-            [InlineKeyboardButton("👤 حالت کاربر", callback_data="tenant:home")],
-        ]
-    )
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 داشبورد", callback_data=TenantAdminSection.DASHBOARD.value), InlineKeyboardButton("👥 کاربران", callback_data=TenantAdminSection.USERS.value)],
+        [InlineKeyboardButton("🛍️ محصولات", callback_data=TenantAdminSection.PRODUCTS.value), InlineKeyboardButton("📋 سفارش‌ها", callback_data=TenantAdminSection.ORDERS.value)],
+        [InlineKeyboardButton("💳 پرداخت‌ها", callback_data=TenantAdminSection.PAYMENTS.value), InlineKeyboardButton("💰 کیف پول", callback_data=TenantAdminSection.WALLET.value)],
+        [InlineKeyboardButton("🎟️ کوپن", callback_data=TenantAdminSection.COUPONS.value), InlineKeyboardButton("🎁 Referral", callback_data=TenantAdminSection.REFERRAL.value)],
+        [InlineKeyboardButton("🖥️ سرویس‌ها", callback_data=TenantAdminSection.SERVICES.value), InlineKeyboardButton("📈 گزارش‌ها", callback_data=TenantAdminSection.REPORTS.value)],
+        [InlineKeyboardButton("📢 پیام همگانی", callback_data=TenantAdminSection.BROADCAST.value), InlineKeyboardButton("🎫 تیکت‌ها", callback_data=TenantAdminSection.TICKETS.value)],
+        [InlineKeyboardButton("🎨 برند", callback_data=TenantAdminSection.BRANDING.value), InlineKeyboardButton("👑 مدیران", callback_data=TenantAdminSection.ADMINS.value)],
+        [InlineKeyboardButton("👤 حالت کاربر", callback_data="tenant:home")],
+    ])
 
 
 async def _ensure_user(db, telegram_user) -> User:
@@ -136,18 +131,17 @@ async def _ensure_membership(db, tenant_id: int, user_id: int) -> None:
 
 
 async def _tenant_access(db, tenant_id: int, telegram_id: int) -> tuple[bool, set[str], str | None]:
-    row = await db.execute(
+    result = await db.execute(
         select(Role.name, Permission.key)
         .join(TenantUserRole, TenantUserRole.role_id == Role.id)
-        .join(Permission, Permission.id == RolePermission.permission_id)
         .join(RolePermission, RolePermission.role_id == Role.id)
-        .join(TenantUser, TenantUserRole.tenant_id == TenantUser.tenant_id, isouter=True)
+        .join(Permission, Permission.id == RolePermission.permission_id)
         .join(User, User.id == TenantUserRole.user_id)
         .where(TenantUserRole.tenant_id == tenant_id, User.telegram_id == telegram_id)
     )
-    rows = row.all()
+    rows = result.all()
     role_names = {name for name, _ in rows}
-    permissions = {permission for _, permission in rows if permission}
+    permissions = {key for _, key in rows if key}
     admin_roles = {"Owner", "Admin", "Finance", "Support", "Sales", "Viewer"}
     role = next((name for name in role_names if name in admin_roles), None)
     return role is not None, permissions, role
@@ -174,8 +168,8 @@ async def _tenant_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         name = tenant.name
     if is_admin:
         await update.message.reply_text(f"👑 پنل مدیریت {name}\n\nنقش شما: {role}\nاز منوی مدیریت استفاده کنید.", reply_markup=admin_menu())
-        return
-    await update.message.reply_text(f"👋 به {name} خوش آمدید.\n\nاز منوی زیر سرویس موردنظر را انتخاب کنید.", reply_markup=user_menu())
+    else:
+        await update.message.reply_text(f"👋 به {name} خوش آمدید.\n\nاز منوی زیر سرویس موردنظر را انتخاب کنید.", reply_markup=user_menu())
 
 
 async def _admin_callback(query, context: ContextTypes.DEFAULT_TYPE, data: str) -> bool:
@@ -192,7 +186,7 @@ async def _admin_callback(query, context: ContextTypes.DEFAULT_TYPE, data: str) 
             paid = await db.scalar(select(func.count()).select_from(Order).where(Order.tenant_id == tenant_id, Order.status == "paid")) or 0
             services = await db.scalar(select(func.count()).select_from(Service).where(Service.tenant_id == tenant_id, Service.status == "active")) or 0
             revenue = await db.scalar(select(func.coalesce(func.sum(Order.total), 0)).where(Order.tenant_id == tenant_id, Order.status == "paid")) or 0
-            text = (f"📊 داشبورد فروشگاه\n\n👥 کاربران فعال: {users}\n🛍️ محصولات فعال: {products}\n📋 کل سفارش‌ها: {orders}\n✅ سفارش‌های پرداخت‌شده: {paid}\n🖥️ سرویس‌های فعال: {services}\n💰 فروش ثبت‌شده: {revenue} تومان\n\n🔐 نقش: {role}")
+            text = f"📊 داشبورد فروشگاه\n\n👥 کاربران فعال: {users}\n🛍️ محصولات فعال: {products}\n📋 کل سفارش‌ها: {orders}\n✅ سفارش‌های پرداخت‌شده: {paid}\n🖥️ سرویس‌های فعال: {services}\n💰 فروش ثبت‌شده: {revenue} تومان\n\n🔐 نقش: {role}"
             await query.edit_message_text(text, reply_markup=admin_menu())
             return True
         page_map = {
@@ -230,10 +224,8 @@ async def _callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     contract = context.bot_data["contract"]
     assert_tenant_access(contract, tenant_id)
     data = query.data or ""
-    if data.startswith("tenant_admin:"):
-        handled = await _admin_callback(query, context, data)
-        if handled:
-            return
+    if data.startswith("tenant_admin:") and await _admin_callback(query, context, data):
+        return
 
     if data in {TenantBotSection.STORE.value, TenantBotSection.PLANS.value}:
         async with SessionLocal() as db:
