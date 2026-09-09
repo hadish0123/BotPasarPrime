@@ -11,8 +11,22 @@ from app.models.entities import Order, OrderItem
 from app.services.audit import audit_sensitive
 from app.services.payments import create_payment, get_payment, transition
 from app.services.provisioning import provision_service_for_order
+from app.services.wallet import post_wallet_transaction
 
 r = APIRouter(prefix="/payments", tags=["payments"])
+
+
+async def _provision_paid_order(db: AsyncSession, tenant_id: int, order: Order):
+    item = await db.scalar(select(OrderItem).where(OrderItem.order_id == order.id).order_by(OrderItem.id))
+    if item is None:
+        raise ValueError("order_item_missing")
+    try:
+        service = await provision_service_for_order(db, tenant_id=tenant_id, order_id=order.id, user_id=order.user_id, duration_days=item.snapshot_duration_days, quota_gb=item.snapshot_quota_gb)
+    except Exception:
+        await db.commit()
+        return None
+    await db.commit()
+    return service
 
 
 @r.post("")
@@ -28,13 +42,25 @@ async def create(x: PaymentCreate, tenant_id: int, claims=Depends(bearer), db: A
         raise HTTPException(400, "payment_amount_mismatch")
     try:
         payment = await create_payment(db=db, tenant_id=tenant_id, order_id=x.order_id, amount=x.amount, provider=x.provider, key=x.idempotency_key)
-        if payment.status == "created":
+        if x.provider == "wallet" and payment.status in {"created", "awaiting_payment"}:
+            await post_wallet_transaction(db, tenant_id=tenant_id, user_id=int(user_id), amount=x.amount, direction="debit", reason=f"order:{order.id}", idempotency_key=f"wallet-payment:{payment.id}")
+            transition(payment, "awaiting_payment")
+            transition(payment, "submitted")
+            transition(payment, "verifying")
+            transition(payment, "paid")
+            order.status = "paid"
+            audit_sensitive(db, action="payment.wallet", tenant_id=tenant_id, actor_type="user", actor_id=user_id, target_type="payment", target_id=payment.id, metadata={"order_id": order.id, "amount": str(payment.amount)})
+        elif payment.status == "created":
             payment.status = "awaiting_payment"
         await db.commit()
-        return {"id": payment.id, "order_id": payment.order_id, "status": payment.status, "provider": payment.provider}
     except ValueError as exc:
         await db.rollback()
         raise HTTPException(400, str(exc)) from None
+
+    service = None
+    if x.provider == "wallet" and payment.status == "paid":
+        service = await _provision_paid_order(db, tenant_id, order)
+    return {"id": payment.id, "order_id": payment.order_id, "status": payment.status, "provider": payment.provider, "service_id": service.id if service else None}
 
 
 @r.get("/{payment_id}")
@@ -98,13 +124,5 @@ async def verify_payment(payment_id: int, tenant_id: int, approve: bool = True, 
 
     service = None
     if approve:
-        item = await db.scalar(select(OrderItem).where(OrderItem.order_id == order.id).order_by(OrderItem.id))
-        if item is None:
-            raise HTTPException(500, "order_item_missing")
-        try:
-            service = await provision_service_for_order(db, tenant_id=tenant_id, order_id=order.id, user_id=order.user_id, duration_days=item.snapshot_duration_days, quota_gb=item.snapshot_quota_gb)
-        except Exception:
-            await db.commit()
-        else:
-            await db.commit()
-    return {"id": payment.id, "order_id": order.id, "status": payment.status, "service_id": service.id if service else None, "service_status": service.status if service else ("provisioning_failed" if approve else None)}
+        service = await _provision_paid_order(db, tenant_id, order)
+    return {"id": payment.id, "order_id": order.id, "status": payment.status, "service_id": service.id if service else None, "service_status": service.status if service else "provisioning_failed"}
