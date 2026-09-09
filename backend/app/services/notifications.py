@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 from datetime import UTC, datetime
 
@@ -7,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Bot
 
-from app.core.config import settings
 from app.models.entities import BotInstance, Notification, User
 from app.security.crypto import box
 
@@ -33,10 +33,10 @@ async def enqueue(db: AsyncSession, tenant_id, user_id, kind, title, body, key):
 
 
 async def deliver_pending(db: AsyncSession, *, limit: int = 50) -> int:
-    """Deliver queued in-app notifications through the tenant bot.
+    """Deliver queued notifications through the tenant bot.
 
-    Delivery is best-effort: the durable notification remains in the database when
-    Telegram is unavailable, and can be retried on the next scheduler cycle.
+    Queue rows are locked so multiple scheduler workers do not send the same
+    notification concurrently. Failed deliveries stay queued for a later cycle.
     """
     rows = list(
         (
@@ -45,6 +45,7 @@ async def deliver_pending(db: AsyncSession, *, limit: int = 50) -> int:
                 .where(Notification.sent_at.is_(None))
                 .order_by(Notification.id)
                 .limit(limit)
+                .with_for_update(skip_locked=True)
             )
         ).all()
     )
@@ -64,10 +65,11 @@ async def deliver_pending(db: AsyncSession, *, limit: int = 50) -> int:
         try:
             token = box.decrypt(bot_row.encrypted_token)
             async with Bot(token=token) as bot:
-                text = f"<b>{notification.title}</b>\n{notification.body}"
+                title = html.escape(notification.title)
+                body = html.escape(notification.body)
                 await bot.send_message(
                     chat_id=user.telegram_id,
-                    text=text,
+                    text=f"<b>{title}</b>\n{body}",
                     parse_mode="HTML",
                     disable_web_page_preview=True,
                 )
