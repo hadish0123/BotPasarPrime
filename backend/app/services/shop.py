@@ -5,7 +5,8 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.entities import Order, OrderItem, Plan, Product
+from app.models.entities import Coupon, CouponUsage, Order, OrderItem, Plan, Product
+from app.services.coupons import calculate_coupon_for_order
 from app.shop_contract import PlanSnapshot, calculate_price
 
 
@@ -137,6 +138,7 @@ async def create_order_from_plan(
     user_id: int,
     plan_id: int,
     key: str,
+    coupon_code: str | None = None,
 ) -> Order:
     if not tenant_id or not user_id:
         raise ValueError("tenant_id and user_id are required")
@@ -160,11 +162,36 @@ async def create_order_from_plan(
         tenant_id,
         plan_id,
     )
+
+    coupon = None
+    discount = Decimal("0.00")
+    if coupon_code:
+        coupon = await db.scalar(
+            select(Coupon)
+            .where(
+                Coupon.tenant_id == tenant_id,
+                Coupon.code == coupon_code.strip().upper(),
+                Coupon.active.is_(True),
+            )
+            .with_for_update()
+        )
+        if coupon is None:
+            raise ValueError("coupon_not_found")
+        _, discount = await calculate_coupon_for_order(
+            db,
+            tenant_id,
+            coupon.code,
+            final_price,
+        )
+        if coupon.usage_limit is not None and coupon.used_count >= coupon.usage_limit:
+            raise ValueError("coupon_usage_limit_reached")
+
+    total = max(Decimal("0.00"), final_price - discount).quantize(Decimal("0.01"))
     order = Order(
         tenant_id=tenant_id,
         user_id=user_id,
         status="created",
-        total=final_price,
+        total=total,
         idempotency_key=key,
     )
     db.add(order)
@@ -174,14 +201,25 @@ async def create_order_from_plan(
         order_id=order.id,
         plan_id=plan.id,
         quantity=1,
-        unit_price=final_price,
+        unit_price=total,
         snapshot_product_name=snapshot.product_name,
         snapshot_plan_name=snapshot.plan_name,
-        snapshot_price=snapshot.price,
+        snapshot_price=total,
         snapshot_duration_days=snapshot.duration_days,
         snapshot_quota_gb=snapshot.quota_gb,
         snapshot_category=snapshot.category,
     )
     db.add(item)
+
+    if coupon is not None:
+        db.add(
+            CouponUsage(
+                coupon_id=coupon.id,
+                user_id=user_id,
+                order_id=order.id,
+            )
+        )
+        coupon.used_count += 1
+
     await db.flush()
     return order
