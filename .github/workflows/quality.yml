@@ -34,6 +34,7 @@ jobs:
       CENTRAL_BOT_TOKEN: test-central-token
       TELEGRAM_WEBHOOK_SECRET: test-webhook-secret
       CORS_ORIGINS: http://localhost:5173
+      PYTHONPATH: .
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,9 +43,9 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m compileall -q app tests
       - run: pytest -q
-      - run: alembic upgrade head
-      - run: alembic downgrade base
-      - run: alembic upgrade head
+      - run: cd backend && PYTHONPATH=. alembic upgrade head
+      - run: cd backend && PYTHONPATH=. alembic downgrade base
+      - run: cd backend && PYTHONPATH=. alembic upgrade head
       - run: ruff check app tests
 
   frontend:
