@@ -9,22 +9,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from app.core.config import settings
 from app.core.db import SessionLocal
-from app.models.entities import (
-    Order,
-    Permission,
-    Plan,
-    Product,
-    Referral,
-    ReferralTransaction,
-    Role,
-    RolePermission,
-    Service,
-    Tenant,
-    TenantUser,
-    TenantUserRole,
-    User,
-    Wallet,
-)
+from app.models.entities import Order, Permission, Plan, Product, Referral, ReferralTransaction, Role, RolePermission, Service, Tenant, TenantUser, TenantUserRole, User, Wallet
 
 
 class TenantBotSection(StrEnum):
@@ -140,10 +125,10 @@ async def _tenant_access(db, tenant_id: int, telegram_id: int) -> tuple[bool, se
         .where(TenantUserRole.tenant_id == tenant_id, User.telegram_id == telegram_id)
     )
     rows = result.all()
-    role_names = {name for name, _ in rows}
+    role_names = list(dict.fromkeys(name for name, _ in rows))
     permissions = {key for _, key in rows if key}
     admin_roles = {"Owner", "Admin", "Finance", "Support", "Sales", "Viewer"}
-    role = next((name for name in role_names if name in admin_roles), None)
+    role = next((name for name in role_names if name in admin_roles), role_names[0] if role_names and permissions else None)
     return role is not None, permissions, role
 
 
@@ -327,14 +312,4 @@ def build_tenant_contract(tenant_id: int, bot_instance_id: int) -> TenantBotCont
     return contract
 
 
-__all__: Final = [
-    "TenantBotSection",
-    "TenantAdminSection",
-    "TenantBotContract",
-    "TenantIsolationViolation",
-    "assert_tenant_access",
-    "user_menu",
-    "admin_menu",
-    "build_tenant_application",
-    "build_tenant_contract",
-]
+__all__: Final = ["TenantBotSection", "TenantAdminSection", "TenantBotContract", "TenantIsolationViolation", "assert_tenant_access", "user_menu", "admin_menu", "build_tenant_application", "build_tenant_contract"]
