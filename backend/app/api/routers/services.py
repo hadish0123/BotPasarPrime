@@ -14,7 +14,7 @@ r = APIRouter(prefix="/services", tags=["services"])
 
 
 def _admin(claims: dict) -> bool:
-    return bool(claims.get("is_platform_owner")) or "services.write" in claims.get("permissions", []) or "services.read" in claims.get("permissions", [])
+    return bool(claims.get("is_platform_owner")) or "services.write" in claims.get("permissions", [])
 
 
 def _serialize(service: Service) -> dict:
@@ -34,8 +34,12 @@ class RenewalRequest(BaseModel):
     quota_gb: int | None = Field(default=None, ge=1, le=10_000_000)
 
 
-async def _get_owned_service(db: AsyncSession, service_id: int, tenant_id: int, claims: dict) -> Service:
-    service = await db.scalar(select(Service).where(Service.id == service_id, Service.tenant_id == tenant_id))
+async def _get_owned_service(
+    db: AsyncSession, service_id: int, tenant_id: int, claims: dict
+) -> Service:
+    service = await db.scalar(
+        select(Service).where(Service.id == service_id, Service.tenant_id == tenant_id)
+    )
     if service is None:
         raise HTTPException(404, "service_not_found")
     current_user = int(claims.get("user_id") or claims.get("sub"))
@@ -45,10 +49,17 @@ async def _get_owned_service(db: AsyncSession, service_id: int, tenant_id: int, 
 
 
 @r.get("")
-async def list_services(tenant_id: int, claims=Depends(bearer), db: AsyncSession = Depends(get_db)):
+async def list_services(
+    tenant_id: int, claims=Depends(bearer), db: AsyncSession = Depends(get_db)
+):
     require_tenant_match(tenant_id, claims)
     current_user = int(claims.get("user_id") or claims.get("sub"))
-    query = select(Service).where(Service.tenant_id == tenant_id).order_by(Service.id.desc()).limit(100)
+    query = (
+        select(Service)
+        .where(Service.tenant_id == tenant_id)
+        .order_by(Service.id.desc())
+        .limit(100)
+    )
     if not _admin(claims):
         query = query.where(Service.user_id == current_user)
     result = await db.execute(query)
@@ -56,13 +67,17 @@ async def list_services(tenant_id: int, claims=Depends(bearer), db: AsyncSession
 
 
 @r.get("/{service_id}")
-async def read_service(service_id: int, tenant_id: int, claims=Depends(bearer), db: AsyncSession = Depends(get_db)):
+async def read_service(
+    service_id: int, tenant_id: int, claims=Depends(bearer), db: AsyncSession = Depends(get_db)
+):
     require_tenant_match(tenant_id, claims)
     return _serialize(await _get_owned_service(db, service_id, tenant_id, claims))
 
 
 @r.get("/{service_id}/subscription")
-async def subscription(service_id: int, tenant_id: int, claims=Depends(bearer), db: AsyncSession = Depends(get_db)):
+async def subscription(
+    service_id: int, tenant_id: int, claims=Depends(bearer), db: AsyncSession = Depends(get_db)
+):
     require_tenant_match(tenant_id, claims)
     await _get_owned_service(db, service_id, tenant_id, claims)
     try:
@@ -74,11 +89,23 @@ async def subscription(service_id: int, tenant_id: int, claims=Depends(bearer), 
 
 
 @r.post("/{service_id}/renew")
-async def renew(service_id: int, tenant_id: int, payload: RenewalRequest, claims=Depends(bearer), db: AsyncSession = Depends(get_db)):
+async def renew(
+    service_id: int,
+    tenant_id: int,
+    payload: RenewalRequest,
+    claims=Depends(bearer),
+    db: AsyncSession = Depends(get_db),
+):
     require_tenant_match(tenant_id, claims)
     await _get_owned_service(db, service_id, tenant_id, claims)
     try:
-        result = await renew_service(db, tenant_id=tenant_id, service_id=service_id, duration_days=payload.duration_days, quota_gb=payload.quota_gb)
+        result = await renew_service(
+            db,
+            tenant_id=tenant_id,
+            service_id=service_id,
+            duration_days=payload.duration_days,
+            quota_gb=payload.quota_gb,
+        )
         await db.commit()
         return _serialize(result)
     except ValueError as exc:
@@ -90,7 +117,12 @@ async def renew(service_id: int, tenant_id: int, payload: RenewalRequest, claims
 
 
 @r.post("/{service_id}/revoke")
-async def revoke(service_id: int, tenant_id: int, claims=Depends(require_permission("services.write")), db: AsyncSession = Depends(get_db)):
+async def revoke(
+    service_id: int,
+    tenant_id: int,
+    claims=Depends(require_permission("services.write")),
+    db: AsyncSession = Depends(get_db),
+):
     require_tenant_match(tenant_id, claims)
     try:
         result = await revoke_service(db, tenant_id=tenant_id, service_id=service_id)
