@@ -1,727 +1,142 @@
-import { useMemo, useState } from 'react';
-import {
-  ArrowLeft,
-  Bell,
-  ChevronLeft,
-  Gift,
-  Headphones,
-  Home,
-  Menu,
-  Package,
-  ShoppingBag,
-  ShoppingCart,
-  User,
-  WalletCards,
-  X,
-} from 'lucide-react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, Gift, Headphones, Home, Package, ShoppingBag, ShoppingCart, User, WalletCards } from 'lucide-react';
+import { api, apiClient } from '../api';
 
-type Page =
-  | 'home'
-  | 'shop'
-  | 'product'
-  | 'checkout'
-  | 'payment'
-  | 'wallet'
-  | 'services'
-  | 'orders'
-  | 'referral'
-  | 'profile'
-  | 'support'
-  | 'notifications'
-  | 'admin';
+type Page = 'home' | 'shop' | 'product' | 'checkout' | 'payment' | 'wallet' | 'services' | 'orders' | 'referral' | 'profile' | 'support' | 'notifications';
+type Plan = { id: number; name: string; price: string; duration_days: number; quota_gb: number | null; product_name: string; description?: string | null };
+type Service = { id: number; status: string; external_id?: string | null; expires_at?: string | null };
+type Order = { id: number; status: string; total: string; created_at: string };
+type Wallet = { balance: string };
+type Brand = { display_name?: string | null; logo_url?: string | null; primary_color?: string | null };
+type TelegramWebApp = { initData: string; ready: () => void; expand: () => void };
+declare global { interface Window { Telegram?: { WebApp?: TelegramWebApp } } }
 
-type Brand = {
-  name: string;
-  logo?: string;
-  primary: string;
-  secondary: string;
-  welcome: string;
-};
+const formatPrice = (value: string | number) => `${new Intl.NumberFormat('fa-IR').format(Number(value))} تومان`;
 
-type Product = {
-  id: number;
-  title: string;
-  description: string;
-  price: number;
-  duration: string;
-  quota: string;
-};
-
-const defaultBrand: Brand = {
-  name: '3XSHOP',
-  primary: '#2563eb',
-  secondary: '#0f172a',
-  welcome: 'سریع، امن و حرفه‌ای',
-};
-
-const products: Product[] = [
-  {
-    id: 1,
-    title: 'پلن 100 گیگ',
-    description: 'پلن مناسب مصرف شخصی و استفاده روزمره',
-    price: 250000,
-    duration: '30 روز',
-    quota: '100 GB',
-  },
-  {
-    id: 2,
-    title: 'پلن 500 گیگ',
-    description: 'پلن پرمصرف برای استفاده طولانی‌تر',
-    price: 650000,
-    duration: '60 روز',
-    quota: '500 GB',
-  },
-  {
-    id: 3,
-    title: 'پلن 1 ترابایت',
-    description: 'پلن حرفه‌ای برای مصرف بالا',
-    price: 1100000,
-    duration: '90 روز',
-    quota: '1 TB',
-  },
-];
-
-const formatPrice = (value: number) =>
-  new Intl.NumberFormat('fa-IR').format(value) + ' تومان';
-
-function BrandMark({ brand }: { brand: Brand }) {
-  return (
-    <div className="mini-brand-mark">
-      {brand.logo ? (
-        <img src={brand.logo} alt={brand.name} />
-      ) : (
-        <span>{brand.name.slice(0, 1)}</span>
-      )}
-    </div>
-  );
-}
-
-function BottomNavigation({
-  page,
-  setPage,
-}: {
-  page: Page;
-  setPage: (page: Page) => void;
-}) {
-  const items: Array<[Page, string, typeof Home]> = [
-    ['home', 'خانه', Home],
-    ['shop', 'فروشگاه', ShoppingBag],
-    ['services', 'سرویس‌ها', Package],
-    ['orders', 'سفارش‌ها', ShoppingCart],
-    ['profile', 'حساب من', User],
-  ];
-
-  return (
-    <nav className="mini-bottom-nav">
-      {items.map(([target, label, Icon]) => (
-        <button
-          key={target}
-          className={page === target ? 'active' : ''}
-          onClick={() => setPage(target)}
-        >
-          <Icon size={20} />
-          <span>{label}</span>
-        </button>
-      ))}
-    </nav>
-  );
-}
-
-function SectionTitle({
-  title,
-  onBack,
-}: {
-  title: string;
-  onBack: () => void;
-}) {
-  return (
-    <div className="mini-section-title">
-      <button className="icon-button" onClick={onBack} aria-label="بازگشت">
-        <ArrowLeft size={20} />
-      </button>
-      <h2>{title}</h2>
-      <div />
-    </div>
-  );
+function SectionTitle({ title, onBack }: { title: string; onBack: () => void }) {
+  return <div className="mini-section-title"><button className="icon-button" onClick={onBack} aria-label="بازگشت"><ArrowLeft size={20} /></button><h2>{title}</h2><div /></div>;
 }
 
 export default function MiniApp() {
-  const [brand] = useState<Brand>(defaultBrand);
+  const params = useMemo(() => new URLSearchParams(window.location.search), []);
+  const tenantId = Number(params.get('tenant_id') || 0);
+  const onboardingMode = params.get('mode') === 'onboarding';
+  const onboardingPath = params.get('path') === 'personal_panel' ? 'personal_panel' : 'representative';
   const [page, setPage] = useState<Page>('home');
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [selected, setSelected] = useState<Plan | null>(null);
+  const [brand, setBrand] = useState<Brand>({ display_name: '3XSHOP', primary_color: '#2563eb' });
+  const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [services, setServices] = useState<Service[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [coupon, setCoupon] = useState('');
+  const [discount, setDiscount] = useState('0');
+  const [orderId, setOrderId] = useState<number | null>(null);
+  const [paymentId, setPaymentId] = useState<number | null>(null);
+  const [reference, setReference] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [onboarding, setOnboarding] = useState({ slug: '', name: '', pasarguard_url: '', pasarguard_api_token: '', pasarguard_username: '', bot_token: '' });
+  const initData = window.Telegram?.WebApp?.initData || '';
 
-  const brandStyle = useMemo(
-    () =>
-      ({
-        '--mini-primary': brand.primary,
-        '--mini-secondary': brand.secondary,
-      }) as React.CSSProperties,
-    [brand],
-  );
-
-  const openProduct = (product: Product) => {
-    setSelectedProduct(product);
-    setPage('product');
+  const auth = async () => {
+    if (!initData) throw new Error('این صفحه باید از داخل Telegram Mini App باز شود.');
+    const path = tenantId ? `/auth/telegram/${tenantId}` : '/auth/telegram';
+    const response = await apiClient.post<{ access_token: string }>(path, undefined, { headers: { 'X-Telegram-Init-Data': initData } });
+    localStorage.setItem('token', response.data.access_token);
   };
 
-  const backHome = () => setPage('home');
-
-  const renderHome = () => (
-    <>
-      <section className="mini-hero">
-        <div className="mini-hero-glow" />
-        <div className="mini-hero-content">
-          <BrandMark brand={brand} />
-          <div>
-            <p className="mini-eyebrow">خوش آمدید</p>
-            <h1>{brand.name}</h1>
-            <p>{brand.welcome}</p>
-          </div>
-        </div>
-      </section>
-
-      <section className="mini-quick-grid">
-        <button onClick={() => setPage('shop')}>
-          <ShoppingBag size={22} />
-          <span>فروشگاه</span>
-          <small>مشاهده پلن‌ها</small>
-        </button>
-
-        <button onClick={() => setPage('wallet')}>
-          <WalletCards size={22} />
-          <span>کیف پول</span>
-          <small>اعتبار حساب</small>
-        </button>
-
-        <button onClick={() => setPage('services')}>
-          <Package size={22} />
-          <span>سرویس‌های من</span>
-          <small>مدیریت سرویس</small>
-        </button>
-
-        <button onClick={() => setPage('support')}>
-          <Headphones size={22} />
-          <span>پشتیبانی</span>
-          <small>ثبت تیکت</small>
-        </button>
-      </section>
-
-      <section className="mini-section">
-        <div className="mini-section-header">
-          <div>
-            <span>پیشنهاد ویژه</span>
-            <h2>پلن‌های محبوب</h2>
-          </div>
-          <button onClick={() => setPage('shop')}>همه</button>
-        </div>
-
-        <div className="mini-products">
-          {products.slice(0, 2).map((product) => (
-            <button
-              className="mini-product-card"
-              key={product.id}
-              onClick={() => openProduct(product)}
-            >
-              <span className="product-icon">
-                <Package size={22} />
-              </span>
-              <div>
-                <strong>{product.title}</strong>
-                <small>
-                  {product.quota} • {product.duration}
-                </small>
-                <b>{formatPrice(product.price)}</b>
-              </div>
-              <ChevronLeft size={19} />
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="mini-info-card">
-        <Gift size={23} />
-        <div>
-          <strong>دوستانت را دعوت کن</strong>
-          <p>با معرفی سرویس به دوستانت، پاداش دریافت کن.</p>
-        </div>
-        <button onClick={() => setPage('referral')}>مشاهده</button>
-      </section>
-    </>
-  );
-
-  const renderShop = () => (
-    <>
-      <SectionTitle title="فروشگاه" onBack={backHome} />
-
-      <div className="mini-page-intro">
-        <span>🛍️</span>
-        <div>
-          <h1>انتخاب پلن</h1>
-          <p>پلن موردنظر خود را انتخاب کنید.</p>
-        </div>
-      </div>
-
-      <div className="mini-product-list">
-        {products.map((product) => (
-          <button
-            className="mini-large-product"
-            key={product.id}
-            onClick={() => openProduct(product)}
-          >
-            <div className="large-product-icon">
-              <Package size={26} />
-            </div>
-
-            <div className="large-product-body">
-              <div className="product-topline">
-                <strong>{product.title}</strong>
-                <span>{product.duration}</span>
-              </div>
-
-              <p>{product.description}</p>
-
-              <div className="product-meta">
-                <span>{product.quota}</span>
-                <b>{formatPrice(product.price)}</b>
-              </div>
-            </div>
-
-            <ChevronLeft size={20} />
-          </button>
-        ))}
-      </div>
-    </>
-  );
-
-  const renderProduct = () => {
-    if (!selectedProduct) {
-      setPage('shop');
-      return null;
+  const loadTenant = async () => {
+    if (!tenantId) return;
+    const products = await api.get<Array<{ id: number; name: string; description?: string | null }>>(`/shop/products?tenant_id=${tenantId}`);
+    const loaded: Plan[] = [];
+    for (const product of products) {
+      const productPlans = await api.get<Array<{ id: number; name: string; price: string; duration_days: number; quota_gb: number | null }>>(`/shop/products/${product.id}/plans?tenant_id=${tenantId}`);
+      for (const plan of productPlans) loaded.push({ ...plan, product_name: product.name, description: product.description });
     }
-
-    return (
-      <>
-        <SectionTitle title="جزئیات محصول" onBack={() => setPage('shop')} />
-
-        <div className="product-detail">
-          <div className="product-detail-icon">
-            <Package size={42} />
-          </div>
-
-          <h1>{selectedProduct.title}</h1>
-          <p>{selectedProduct.description}</p>
-
-          <div className="detail-stats">
-            <div>
-              <span>حجم</span>
-              <strong>{selectedProduct.quota}</strong>
-            </div>
-            <div>
-              <span>مدت</span>
-              <strong>{selectedProduct.duration}</strong>
-            </div>
-          </div>
-
-          <div className="price-box">
-            <span>قیمت نهایی</span>
-            <strong>{formatPrice(selectedProduct.price)}</strong>
-          </div>
-
-          <button
-            className="mini-primary-button"
-            onClick={() => setPage('checkout')}
-          >
-            <ShoppingCart size={20} />
-            ادامه خرید
-          </button>
-        </div>
-      </>
-    );
+    setPlans(loaded);
+    try {
+      const settings = await api.get<{ branding: Brand }>(`/settings?tenant_id=${tenantId}`);
+      setBrand(settings.branding || {});
+    } catch { /* optional branding */ }
+    await refreshUserData();
   };
 
-  const renderCheckout = () => {
-    if (!selectedProduct) {
-      setPage('shop');
-      return null;
-    }
-
-    return (
-      <>
-        <SectionTitle title="تکمیل سفارش" onBack={() => setPage('product')} />
-
-        <div className="checkout-card">
-          <div className="checkout-product">
-            <Package size={25} />
-            <div>
-              <strong>{selectedProduct.title}</strong>
-              <span>
-                {selectedProduct.quota} • {selectedProduct.duration}
-              </span>
-            </div>
-          </div>
-
-          <div className="checkout-row">
-            <span>قیمت محصول</span>
-            <strong>{formatPrice(selectedProduct.price)}</strong>
-          </div>
-
-          <div className="checkout-row">
-            <span>تخفیف</span>
-            <strong>۰ تومان</strong>
-          </div>
-
-          <div className="checkout-total">
-            <span>مبلغ قابل پرداخت</span>
-            <strong>{formatPrice(selectedProduct.price)}</strong>
-          </div>
-
-          <button
-            className="mini-primary-button"
-            onClick={() => setPage('payment')}
-          >
-            ادامه به پرداخت
-          </button>
-        </div>
-      </>
-    );
+  const refreshUserData = async () => {
+    if (!tenantId) return;
+    const [w, s, o] = await Promise.all([
+      api.get<Wallet>(`/wallet?tenant_id=${tenantId}`),
+      api.get<Service[]>(`/services?tenant_id=${tenantId}`),
+      api.get<Order[]>(`/orders?tenant_id=${tenantId}`),
+    ]);
+    setWallet(w); setServices(s); setOrders(o);
   };
 
-  const renderPayment = () => (
-    <>
-      <SectionTitle title="پرداخت" onBack={() => setPage('checkout')} />
+  useEffect(() => {
+    window.Telegram?.WebApp?.ready();
+    window.Telegram?.WebApp?.expand();
+    const boot = async () => {
+      try { await auth(); if (!onboardingMode) await loadTenant(); } catch (err) { setError(err instanceof Error ? err.message : 'خطای ورود'); } finally { setLoading(false); }
+    };
+    void boot();
+  }, []);
 
-      <div className="payment-card">
-        <div className="payment-icon">
-          <WalletCards size={32} />
-        </div>
-
-        <h1>انتخاب روش پرداخت</h1>
-        <p>
-          روش پرداخت موردنظر را انتخاب کنید. اتصال واقعی در لایه پرداخت
-          پلتفرم انجام می‌شود.
-        </p>
-
-        <button className="payment-method">
-          <WalletCards size={21} />
-          <div>
-            <strong>کیف پول</strong>
-            <span>پرداخت از موجودی حساب</span>
-          </div>
-          <ChevronLeft size={18} />
-        </button>
-
-        <button className="payment-method">
-          <ShoppingCart size={21} />
-          <div>
-            <strong>درگاه پرداخت</strong>
-            <span>انتقال به درگاه رسمی</span>
-          </div>
-          <ChevronLeft size={18} />
-        </button>
-      </div>
-    </>
-  );
-
-  const renderWallet = () => (
-    <>
-      <SectionTitle title="کیف پول" onBack={backHome} />
-
-      <div className="wallet-balance">
-        <span>موجودی کیف پول</span>
-        <strong>۰ تومان</strong>
-        <small>اطلاعات موجودی از Backend دریافت می‌شود.</small>
-      </div>
-
-      <div className="mini-empty">
-        <WalletCards size={32} />
-        <strong>تراکنشی ثبت نشده است</strong>
-        <p>تاریخچه تراکنش‌های کیف پول اینجا نمایش داده می‌شود.</p>
-      </div>
-    </>
-  );
-
-  const renderServices = () => (
-    <>
-      <SectionTitle title="سرویس‌های من" onBack={backHome} />
-
-      <div className="mini-empty">
-        <Package size={34} />
-        <strong>هنوز سرویسی ندارید</strong>
-        <p>پس از خرید، سرویس‌های شما در این قسمت نمایش داده می‌شوند.</p>
-        <button className="mini-secondary-button" onClick={() => setPage('shop')}>
-          مشاهده فروشگاه
-        </button>
-      </div>
-    </>
-  );
-
-  const renderOrders = () => (
-    <>
-      <SectionTitle title="سفارش‌های من" onBack={backHome} />
-
-      <div className="mini-empty">
-        <ShoppingCart size={34} />
-        <strong>سفارشی وجود ندارد</strong>
-        <p>تاریخچه سفارش‌های شما در این قسمت نمایش داده می‌شود.</p>
-      </div>
-    </>
-  );
-
-  const renderReferral = () => (
-    <>
-      <SectionTitle title="دعوت دوستان" onBack={backHome} />
-
-      <div className="referral-card">
-        <Gift size={38} />
-        <h1>دوستانت را دعوت کن</h1>
-        <p>
-          لینک دعوت اختصاصی شما پس از اتصال سیستم Referral در این بخش قرار
-          می‌گیرد.
-        </p>
-
-        <div className="referral-code">
-          <span>کد دعوت</span>
-          <strong>---</strong>
-        </div>
-      </div>
-    </>
-  );
-
-  const renderProfile = () => (
-    <>
-      <SectionTitle title="حساب من" onBack={backHome} />
-
-      <div className="profile-card">
-        <div className="profile-avatar">
-          <User size={30} />
-        </div>
-        <div>
-          <strong>کاربر</strong>
-          <span>اطلاعات حساب از Telegram دریافت می‌شود.</span>
-        </div>
-      </div>
-
-      <div className="profile-links">
-        <button onClick={() => setPage('notifications')}>
-          <Bell size={20} />
-          اعلان‌ها
-          <ChevronLeft size={18} />
-        </button>
-
-        <button onClick={() => setPage('support')}>
-          <Headphones size={20} />
-          پشتیبانی و تیکت
-          <ChevronLeft size={18} />
-        </button>
-
-        <button onClick={() => setPage('referral')}>
-          <Gift size={20} />
-          دعوت دوستان
-          <ChevronLeft size={18} />
-        </button>
-      </div>
-    </>
-  );
-
-  const renderSupport = () => (
-    <>
-      <SectionTitle title="پشتیبانی" onBack={backHome} />
-
-      <div className="support-card">
-        <Headphones size={38} />
-        <h1>در کنار شما هستیم</h1>
-        <p>
-          برای ثبت درخواست پشتیبانی، سیستم تیکت Tenant در Backend استفاده
-          خواهد شد.
-        </p>
-
-        <button className="mini-primary-button">
-          ثبت تیکت جدید
-        </button>
-      </div>
-    </>
-  );
-
-  const renderNotifications = () => (
-    <>
-      <SectionTitle title="اعلان‌ها" onBack={() => setPage('profile')} />
-
-      <div className="mini-empty">
-        <Bell size={34} />
-        <strong>اعلان جدیدی ندارید</strong>
-        <p>اعلان‌های خرید، سرویس و انقضا اینجا نمایش داده می‌شوند.</p>
-      </div>
-    </>
-  );
-
-  const renderAdmin = () => (
-    <>
-      <SectionTitle title="مدیریت Tenant" onBack={backHome} />
-
-      <div className="admin-grid">
-        {[
-          ['Dashboard', '📊'],
-          ['Users', '👥'],
-          ['Orders', '📋'],
-          ['Products', '🛍️'],
-          ['Payments', '💳'],
-          ['Services', '🖥️'],
-          ['Reports', '📈'],
-          ['Settings', '⚙️'],
-        ].map(([title, icon]) => (
-          <button key={title} className="admin-tile">
-            <span>{icon}</span>
-            <strong>{title}</strong>
-          </button>
-        ))}
-      </div>
-    </>
-  );
-
-  const renderPage = () => {
-    switch (page) {
-      case 'home':
-        return renderHome();
-      case 'shop':
-        return renderShop();
-      case 'product':
-        return renderProduct();
-      case 'checkout':
-        return renderCheckout();
-      case 'payment':
-        return renderPayment();
-      case 'wallet':
-        return renderWallet();
-      case 'services':
-        return renderServices();
-      case 'orders':
-        return renderOrders();
-      case 'referral':
-        return renderReferral();
-      case 'profile':
-        return renderProfile();
-      case 'support':
-        return renderSupport();
-      case 'notifications':
-        return renderNotifications();
-      case 'admin':
-        return renderAdmin();
-      default:
-        return renderHome();
-    }
+  const openProduct = (plan: Plan) => { setSelected(plan); setDiscount('0'); setPage('product'); };
+  const applyCoupon = async () => {
+    if (!selected || !coupon) return;
+    try {
+      const result = await api.post<{ discount: string }>(`/coupons/validate?tenant_id=${tenantId}&code=${encodeURIComponent(coupon)}&subtotal=${selected.price}`);
+      setDiscount(result.discount); setNotice('کد تخفیف اعمال شد.');
+    } catch (err) { setNotice(err instanceof Error ? err.message : 'کد تخفیف نامعتبر است.'); }
   };
 
-  return (
-    <div className="mini-app" dir="rtl" style={brandStyle}>
-      <header className="mini-header">
-        <div className="mini-header-brand">
-          <BrandMark brand={brand} />
-          <strong>{brand.name}</strong>
-        </div>
+  const createOrder = async () => {
+    if (!selected) return;
+    try {
+      const key = `mini-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const result = await api.post<{ id: number; total: string }>('/orders', { plan_id: selected.id, coupon_code: coupon || undefined, idempotency_key: key }, key);
+      setOrderId(result.id); setPage('payment'); await refreshUserData();
+    } catch (err) { setNotice(err instanceof Error ? err.message : 'ساخت سفارش ناموفق بود.'); }
+  };
 
-        <div className="mini-header-actions">
-          <button
-            className="icon-button"
-            onClick={() => setPage('notifications')}
-            aria-label="اعلان‌ها"
-          >
-            <Bell size={20} />
-          </button>
+  const createPayment = async () => {
+    if (!orderId) return;
+    try {
+      const detail = await api.get<{ total: string }>(`/orders/${orderId}?tenant_id=${tenantId}`);
+      const result = await api.post<{ id: number }>('/payments', { order_id: orderId, amount: detail.total, provider: 'manual', idempotency_key: `pay-${orderId}` });
+      setPaymentId(result.id); setNotice('پرداخت آماده ثبت رسید است.');
+    } catch (err) { setNotice(err instanceof Error ? err.message : 'ایجاد پرداخت ناموفق بود.'); }
+  };
 
-          <button
-            className="icon-button"
-            onClick={() => setMenuOpen(true)}
-            aria-label="منو"
-          >
-            <Menu size={20} />
-          </button>
-        </div>
-      </header>
+  const submitPayment = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!paymentId || !reference.trim()) return;
+    try { await api.post(`/payments/${paymentId}/submit?tenant_id=${tenantId}&reference=${encodeURIComponent(reference.trim())}`); setNotice('رسید ثبت شد و در انتظار تأیید است.'); await refreshUserData(); } catch (err) { setNotice(err instanceof Error ? err.message : 'ثبت رسید ناموفق بود.'); }
+  };
 
-      <main className="mini-content">{renderPage()}</main>
+  const submitOnboarding = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      const key = `onboard-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const result = await api.post<{ tenant_id: number; activation_fee_toman: number }>('/onboarding', { ...onboarding, path: onboardingPath, bot_name: 'Sales Bot', idempotency_key: key }, key);
+      setNotice(result.activation_fee_toman ? `درخواست ثبت شد. مبلغ فعال‌سازی: ${formatPrice(result.activation_fee_toman)}` : 'درخواست ثبت شد و برای بررسی Owner ارسال شد.');
+    } catch (err) { setNotice(err instanceof Error ? err.message : 'ثبت درخواست ناموفق بود.'); }
+  };
 
-      {page !== 'product' &&
-        page !== 'checkout' &&
-        page !== 'payment' &&
-        page !== 'notifications' &&
-        page !== 'admin' && (
-          <BottomNavigation page={page} setPage={setPage} />
-        )}
+  if (loading) return <main className="mini-app"><div className="mini-empty"><strong>در حال اتصال امن…</strong></div></main>;
+  if (error) return <main className="mini-app"><div className="mini-empty"><strong>ورود ناموفق بود</strong><p>{error}</p></div></main>;
+  if (onboardingMode) return <main className="mini-app" dir="rtl"><section className="mini-hero"><div className="mini-hero-content"><div><p className="mini-eyebrow">ثبت امن</p><h1>راه‌اندازی {onboardingPath === 'personal_panel' ? 'پنل شخصی' : 'نماینده'}</h1><p>اطلاعات حساس فقط از طریق اتصال امن ارسال می‌شود.</p></div></div></section><form className="checkout-card" onSubmit={submitOnboarding}><label>نام برند<input value={onboarding.name} onChange={(e) => setOnboarding({ ...onboarding, name: e.target.value })} required /></label><label>شناسه فروشگاه<input value={onboarding.slug} onChange={(e) => setOnboarding({ ...onboarding, slug: e.target.value })} required /></label><label>آدرس PasarGuard<input type="url" value={onboarding.pasarguard_url} onChange={(e) => setOnboarding({ ...onboarding, pasarguard_url: e.target.value })} required /></label><label>API Token PasarGuard<input type="password" value={onboarding.pasarguard_api_token} onChange={(e) => setOnboarding({ ...onboarding, pasarguard_api_token: e.target.value })} required /></label><label>Username PasarGuard<input value={onboarding.pasarguard_username} onChange={(e) => setOnboarding({ ...onboarding, pasarguard_username: e.target.value })} required /></label><label>Telegram Bot Token<input type="password" value={onboarding.bot_token} onChange={(e) => setOnboarding({ ...onboarding, bot_token: e.target.value })} required /></label><button className="mini-primary-button" type="submit">ثبت درخواست</button>{notice && <p>{notice}</p>}</form></main>;
 
-      {menuOpen && (
-        <div className="mini-drawer-backdrop" onClick={() => setMenuOpen(false)}>
-          <aside
-            className="mini-drawer"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="drawer-header">
-              <div className="mini-header-brand">
-                <BrandMark brand={brand} />
-                <strong>{brand.name}</strong>
-              </div>
+  const renderHome = () => <><section className="mini-hero"><div className="mini-hero-content"><div><p className="mini-eyebrow">خوش آمدید</p><h1>{brand.display_name || '3XSHOP'}</h1><p>خرید، پرداخت و مدیریت سرویس در یکجا</p></div></div></section><section className="mini-quick-grid"><button onClick={() => setPage('shop')}><ShoppingBag size={22}/><span>فروشگاه</span><small>پلن‌های فعال</small></button><button onClick={() => setPage('wallet')}><WalletCards size={22}/><span>کیف پول</span><small>{wallet ? formatPrice(wallet.balance) : 'در حال دریافت'}</small></button><button onClick={() => setPage('services')}><Package size={22}/><span>سرویس‌ها</span><small>{services.length} سرویس</small></button><button onClick={() => setPage('support')}><Headphones size={22}/><span>پشتیبانی</span><small>ثبت تیکت</small></button></section></>;
+  const renderShop = () => <><SectionTitle title="فروشگاه" onBack={() => setPage('home')}/><div className="mini-product-list">{plans.length ? plans.map((plan) => <button className="mini-large-product" key={plan.id} onClick={() => openProduct(plan)}><div className="large-product-icon"><Package size={26}/></div><div className="large-product-body"><div className="product-topline"><strong>{plan.product_name} — {plan.name}</strong><span>{plan.duration_days} روز</span></div><p>{plan.description || 'پلن سرویس'}</p><div className="product-meta"><span>{plan.quota_gb == null ? 'نامحدود' : `${plan.quota_gb} GB`}</span><b>{formatPrice(plan.price)}</b></div></div></button>) : <div className="mini-empty"><strong>محصول فعالی وجود ندارد.</strong></div>}</div></>;
+  const renderProduct = () => selected && <><SectionTitle title="جزئیات پلن" onBack={() => setPage('shop')}/><div className="product-detail"><div className="product-detail-icon"><Package size={42}/></div><h1>{selected.product_name} — {selected.name}</h1><p>{selected.description || 'پلن سرویس'}</p><div className="detail-stats"><div><span>حجم</span><strong>{selected.quota_gb == null ? 'نامحدود' : `${selected.quota_gb} GB`}</strong></div><div><span>مدت</span><strong>{selected.duration_days} روز</strong></div></div><div className="price-box"><span>قیمت</span><strong>{formatPrice(selected.price)}</strong></div><button className="mini-primary-button" onClick={() => setPage('checkout')}><ShoppingCart size={20}/> ادامه</button></div></>;
+  const renderCheckout = () => selected && <><SectionTitle title="تکمیل سفارش" onBack={() => setPage('product')}/><div className="checkout-card"><div className="checkout-row"><span>قیمت</span><strong>{formatPrice(selected.price)}</strong></div><div className="checkout-row"><span>تخفیف</span><strong>{formatPrice(discount)}</strong></div><label>کد تخفیف<input value={coupon} onChange={(e) => setCoupon(e.target.value)} placeholder="مثلاً VIP20"/></label><button className="mini-secondary-button" onClick={() => void applyCoupon()}>اعمال کد</button><div className="checkout-total"><span>قابل پرداخت</span><strong>{formatPrice(Math.max(0, Number(selected.price) - Number(discount)))}</strong></div><button className="mini-primary-button" onClick={() => void createOrder()}>ثبت سفارش</button></div></>;
+  const renderPayment = () => <><SectionTitle title="پرداخت" onBack={() => setPage('checkout')}/><div className="payment-card"><WalletCards size={32}/><h1>پرداخت دستی</h1><p>پس از پرداخت، شناسه رسید را ثبت کنید تا بررسی شود.</p>{!paymentId ? <button className="mini-primary-button" onClick={() => void createPayment()}>ایجاد پرداخت</button> : <form onSubmit={submitPayment}><label>شناسه رسید<input value={reference} onChange={(e) => setReference(e.target.value)} required /></label><button className="mini-primary-button" type="submit">ثبت رسید</button></form>}{notice && <p>{notice}</p>}</div></>;
+  const renderWallet = () => <><SectionTitle title="کیف پول" onBack={() => setPage('home')}/><div className="wallet-balance"><span>موجودی</span><strong>{wallet ? formatPrice(wallet.balance) : '—'}</strong></div></>;
+  const renderServices = () => <><SectionTitle title="سرویس‌های من" onBack={() => setPage('home')}/><div className="mini-product-list">{services.length ? services.map((s) => <div className="mini-large-product" key={s.id}><Package size={25}/><div><strong>سرویس #{s.id}</strong><p>وضعیت: {s.status}</p><small>انقضا: {s.expires_at || '—'}</small></div></div>) : <div className="mini-empty"><strong>هنوز سرویسی ندارید.</strong></div>}</div></>;
+  const renderOrders = () => <><SectionTitle title="سفارش‌ها" onBack={() => setPage('home')}/><div className="mini-product-list">{orders.length ? orders.map((o) => <div className="mini-large-product" key={o.id}><ShoppingCart size={24}/><div><strong>سفارش #{o.id}</strong><p>{o.status}</p><b>{formatPrice(o.total)}</b></div></div>) : <div className="mini-empty"><strong>سفارشی ندارید.</strong></div>}</div></>;
+  const renderSimple = (title: string, icon: JSX.Element, text: string) => <><SectionTitle title={title} onBack={() => setPage('home')}/><div className="mini-empty">{icon}<strong>{text}</strong></div></>;
 
-              <button
-                className="icon-button"
-                onClick={() => setMenuOpen(false)}
-                aria-label="بستن"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <button
-              onClick={() => {
-                setPage('profile');
-                setMenuOpen(false);
-              }}
-            >
-              <User size={20} />
-              حساب کاربری
-            </button>
-
-            <button
-              onClick={() => {
-                setPage('wallet');
-                setMenuOpen(false);
-              }}
-            >
-              <WalletCards size={20} />
-              کیف پول
-            </button>
-
-            <button
-              onClick={() => {
-                setPage('referral');
-                setMenuOpen(false);
-              }}
-            >
-              <Gift size={20} />
-              دعوت دوستان
-            </button>
-
-            <button
-              onClick={() => {
-                setPage('support');
-                setMenuOpen(false);
-              }}
-            >
-              <Headphones size={20} />
-              پشتیبانی
-            </button>
-
-            <button
-              onClick={() => {
-                setPage('admin');
-                setMenuOpen(false);
-              }}
-            >
-              ⚙️
-              پنل مدیریت
-            </button>
-          </aside>
-        </div>
-      )}
-    </div>
-  );
+  return <main className="mini-app" dir="rtl" style={{ '--mini-primary': brand.primary_color || '#2563eb' } as React.CSSProperties}>{page === 'home' && renderHome()}{page === 'shop' && renderShop()}{page === 'product' && renderProduct()}{page === 'checkout' && renderCheckout()}{page === 'payment' && renderPayment()}{page === 'wallet' && renderWallet()}{page === 'services' && renderServices()}{page === 'orders' && renderOrders()}{page === 'referral' && renderSimple('دعوت دوستان', <Gift size={36}/>, 'سیستم Referral از Backend مدیریت می‌شود.')}{page === 'support' && renderSimple('پشتیبانی', <Headphones size={36}/>, 'برای ثبت و پیگیری تیکت از پنل پشتیبانی استفاده کنید.')}{page === 'notifications' && renderSimple('اعلان‌ها', <Home size={36}/>, 'اعلان‌های حساب شما در این بخش نمایش داده می‌شوند.')}{page === 'profile' && renderSimple('حساب من', <User size={36}/>, 'پروفایل Telegram شما به حساب امن متصل است.')}<nav className="mini-bottom-nav"><button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}><Home size={20}/><span>خانه</span></button><button className={page === 'shop' ? 'active' : ''} onClick={() => setPage('shop')}><ShoppingBag size={20}/><span>فروشگاه</span></button><button className={page === 'services' ? 'active' : ''} onClick={() => setPage('services')}><Package size={20}/><span>سرویس‌ها</span></button><button className={page === 'orders' ? 'active' : ''} onClick={() => setPage('orders')}><ShoppingCart size={20}/><span>سفارش‌ها</span></button><button className={page === 'profile' ? 'active' : ''} onClick={() => setPage('profile')}><User size={20}/><span>حساب</span></button></nav></main>;
 }
