@@ -125,7 +125,11 @@ async def read_order(
                 "unit_price": str(item.unit_price),
                 "product_name": item.snapshot_product_name,
                 "plan_name": item.snapshot_plan_name,
-                "price": str(item.snapshot_price) if item.snapshot_price is not None else None,
+                "price": (
+                    str(item.snapshot_price)
+                    if item.snapshot_price is not None
+                    else None
+                ),
                 "duration_days": item.snapshot_duration_days,
                 "quota_gb": item.snapshot_quota_gb,
                 "category": item.snapshot_category,
