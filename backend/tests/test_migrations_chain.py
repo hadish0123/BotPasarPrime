@@ -5,6 +5,8 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
+import app.models.onboarding  # noqa: F401
+
 
 def test_migration_chain_has_single_root_and_expected_head() -> None:
     backend = Path(__file__).resolve().parents[1]
