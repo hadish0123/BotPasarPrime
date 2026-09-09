@@ -1,3 +1,4 @@
+from cryptography.fernet import Fernet, InvalidToken
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -18,16 +19,27 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     rate_limit_per_minute: int = 120
     telegram_init_data_max_age: int = 300
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        case_sensitive=False,
+    )
 
     @field_validator("jwt_secret", "fernet_key", "telegram_webhook_secret")
     @classmethod
     def non_empty_secrets(cls, value: str) -> str:
         if value.strip() in {"", "CHANGE_ME", "changeme"}:
             return ""
-        return value
+        return value.strip()
 
     def validate_runtime(self) -> None:
+        if self.activation_fee_toman < 0:
+            raise RuntimeError("ACTIVATION_FEE_TOMAN cannot be negative")
+        if self.rate_limit_per_minute < 1:
+            raise RuntimeError("RATE_LIMIT_PER_MINUTE must be positive")
+        if not 30 <= self.telegram_init_data_max_age <= 86400:
+            raise RuntimeError("TELEGRAM_INIT_DATA_MAX_AGE must be between 30 and 86400 seconds")
+
         if self.app_env.lower() in {"production", "prod"}:
             required = {
                 "JWT_SECRET": self.jwt_secret,
@@ -38,8 +50,17 @@ class Settings(BaseSettings):
             missing = [key for key, value in required.items() if not value]
             if missing:
                 raise RuntimeError("Missing production secrets: " + ", ".join(missing))
-            if not self.database_url.startswith(("postgresql+asyncpg://", "postgresql://")):
-                raise RuntimeError("Production requires PostgreSQL")
+            if not self.database_url.startswith("postgresql+asyncpg://"):
+                raise RuntimeError("Production requires PostgreSQL via asyncpg")
+            if len(self.jwt_secret) < 32:
+                raise RuntimeError("JWT_SECRET must contain at least 32 characters")
+            try:
+                Fernet(self.fernet_key)
+            except (ValueError, TypeError, InvalidToken) as exc:
+                raise RuntimeError("FERNET_KEY must be a valid Fernet key") from exc
+            origins = [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+            if not origins or "*" in origins:
+                raise RuntimeError("Production CORS_ORIGINS must contain explicit origins")
 
 
 settings = Settings()
