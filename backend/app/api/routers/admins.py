@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import require_permission, require_tenant_match
 from app.core.db import get_db
-from app.models.entities import Admin, AdminRole, Permission, Role, RolePermission
+from app.models.entities import Admin, AdminRole, Permission, Role, RolePermission, User
 from app.security.rbac import ROLE_PERMISSIONS
 
 r = APIRouter(prefix="/admins", tags=["admins"])
@@ -27,28 +27,46 @@ class RoleCreate(BaseModel):
     permissions: list[str] = Field(default_factory=list, max_length=100)
 
 
+def _tenant_allowed(tenant_id: int | None, claims: dict) -> bool:
+    if tenant_id is None:
+        return claims.get("role") == "Owner"
+    require_tenant_match(tenant_id, claims)
+    return True
+
+
 @r.get("")
 async def list_admins(
     claims=Depends(require_permission("admins.read")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(select(Admin).order_by(Admin.id.desc()))
+    result = await db.execute(
+        select(Admin, User)
+        .join(User, User.id == Admin.user_id)
+        .order_by(Admin.id.desc())
+    )
     rows = []
-    for admin in result.scalars().all():
-        roles = await db.execute(
-            select(Role.name, AdminRole.tenant_id)
-            .join(AdminRole, AdminRole.role_id == Role.id)
-            .where(AdminRole.admin_id == admin.id)
-        )
+    for admin, user in result.all():
+        roles_query = select(Role.name, AdminRole.tenant_id).join(
+            AdminRole, AdminRole.role_id == Role.id
+        ).where(AdminRole.admin_id == admin.id)
+        if claims.get("role") != "Owner":
+            tenant_id = claims.get("tenant_id")
+            if tenant_id is None:
+                continue
+            roles_query = roles_query.where(AdminRole.tenant_id == tenant_id)
+        roles = await db.execute(roles_query)
+        role_rows = roles.all()
+        if claims.get("role") != "Owner" and not role_rows:
+            continue
         rows.append(
             {
                 "id": admin.id,
-                "telegram_id": admin.telegram_id,
-                "username": admin.username,
-                "is_active": admin.is_active,
+                "telegram_id": user.telegram_id,
+                "username": user.username,
+                "is_active": admin.active,
                 "roles": [
                     {"name": name, "tenant_id": tenant}
-                    for name, tenant in roles.all()
+                    for name, tenant in role_rows
                 ],
             }
         )
@@ -61,38 +79,35 @@ async def create_admin(
     claims=Depends(require_permission("admins.write")),
     db: AsyncSession = Depends(get_db),
 ):
-    if x.tenant_id is not None:
-        require_tenant_match(x.tenant_id, claims)
-    if x.role not in ROLE_PERMISSIONS:
+    _tenant_allowed(x.tenant_id, claims)
+
+    if x.role in ROLE_PERMISSIONS:
         role = await db.scalar(
-            select(Role).where(
-                Role.name == x.role,
-                Role.tenant_id == x.tenant_id,
-            )
+            select(Role).where(Role.name == x.role, Role.tenant_id.is_(None))
         )
-        if role is None:
-            raise HTTPException(400, "role_not_found")
     else:
         role = await db.scalar(
-            select(Role).where(
-                Role.name == x.role,
-                Role.tenant_id.is_(None),
-            )
+            select(Role).where(Role.name == x.role, Role.tenant_id == x.tenant_id)
         )
-    admin = await db.scalar(select(Admin).where(Admin.telegram_id == x.telegram_id))
-    if admin is None:
-        admin = Admin(
-            telegram_id=x.telegram_id,
-            username=x.username,
-            is_active=True,
-        )
-        db.add(admin)
-        await db.flush()
-    elif not admin.is_active:
-        admin.is_active = True
-        admin.username = x.username
     if role is None:
         raise HTTPException(400, "role_not_found")
+
+    user = await db.scalar(select(User).where(User.telegram_id == x.telegram_id))
+    if user is None:
+        user = User(telegram_id=x.telegram_id, username=x.username)
+        db.add(user)
+        await db.flush()
+    elif x.username is not None:
+        user.username = x.username
+
+    admin = await db.scalar(select(Admin).where(Admin.user_id == user.id))
+    if admin is None:
+        admin = Admin(user_id=user.id, active=True)
+        db.add(admin)
+        await db.flush()
+    else:
+        admin.active = True
+
     existing = await db.scalar(
         select(AdminRole).where(
             AdminRole.admin_id == admin.id,
@@ -101,17 +116,11 @@ async def create_admin(
         )
     )
     if existing is None:
-        db.add(
-            AdminRole(
-                admin_id=admin.id,
-                role_id=role.id,
-                tenant_id=x.tenant_id,
-            )
-        )
+        db.add(AdminRole(admin_id=admin.id, role_id=role.id, tenant_id=x.tenant_id))
     await db.commit()
     return {
         "id": admin.id,
-        "telegram_id": admin.telegram_id,
+        "telegram_id": user.telegram_id,
         "role": role.name,
         "tenant_id": x.tenant_id,
     }
@@ -122,9 +131,13 @@ async def list_roles(
     claims=Depends(require_permission("admins.read")),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Role).order_by(Role.tenant_id, Role.name)
-    )
+    query = select(Role).order_by(Role.tenant_id, Role.name)
+    if claims.get("role") != "Owner":
+        tenant_id = claims.get("tenant_id")
+        if tenant_id is None:
+            return []
+        query = query.where((Role.tenant_id == tenant_id) | (Role.tenant_id.is_(None)))
+    result = await db.execute(query)
     return [
         {
             "id": role.id,
@@ -143,10 +156,16 @@ async def create_role(
     claims=Depends(require_permission("admins.write")),
     db: AsyncSession = Depends(get_db),
 ):
-    if x.tenant_id is not None:
-        require_tenant_match(x.tenant_id, claims)
+    _tenant_allowed(x.tenant_id, claims)
     if x.name in ROLE_PERMISSIONS:
         raise HTTPException(400, "system_role_name_reserved")
+
+    duplicate = await db.scalar(
+        select(Role).where(Role.name == x.name, Role.tenant_id == x.tenant_id)
+    )
+    if duplicate is not None:
+        raise HTTPException(409, "role_exists")
+
     role = Role(
         tenant_id=x.tenant_id,
         name=x.name,
@@ -157,19 +176,12 @@ async def create_role(
     await db.flush()
     if x.permissions:
         perms = (
-            await db.scalars(
-                select(Permission).where(Permission.key.in_(x.permissions))
-            )
+            await db.scalars(select(Permission).where(Permission.key.in_(x.permissions)))
         ).all()
         if len(perms) != len(set(x.permissions)):
             raise HTTPException(400, "unknown_permission")
         for permission in perms:
-            db.add(
-                RolePermission(
-                    role_id=role.id,
-                    permission_id=permission.id,
-                )
-            )
+            db.add(RolePermission(role_id=role.id, permission_id=permission.id))
     await db.commit()
     return {
         "id": role.id,
