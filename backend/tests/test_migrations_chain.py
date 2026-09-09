@@ -19,4 +19,4 @@ def test_migration_chain_has_single_root_and_current_head() -> None:
     heads = scripts.get_heads()
 
     assert [revision.revision for revision in roots] == ["0001_initial"]
-    assert heads == ["0010_page16_notifications"]
+    assert heads == ["0011_onboarding_payments"]
