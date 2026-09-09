@@ -13,6 +13,8 @@ from app.pasarguard.base import PasarGuardCredentials
 from app.pasarguard.client import PasarGuardClient
 from app.security.crypto import box
 
+MAX_PROVISION_RETRIES = 3
+
 
 def _username(user: User, order_id: int) -> str:
     base = (user.username or f"user{user.id}").strip().lower()
@@ -30,11 +32,7 @@ async def _credentials(db: AsyncSession, tenant_id: int) -> PasarGuardCredential
         select(TenantCredential).where(
             TenantCredential.tenant_id == tenant_id,
             TenantCredential.kind.in_(
-                [
-                    "pasarguard_api_token",
-                    "pasarguard_login_url",
-                    "pasarguard_username",
-                ]
+                ["pasarguard_api_token", "pasarguard_login_url", "pasarguard_username"]
             ),
         )
     )
@@ -49,14 +47,15 @@ async def _credentials(db: AsyncSession, tenant_id: int) -> PasarGuardCredential
         raise ValueError("PasarGuard credentials are incomplete") from exc
 
 
-async def _mark_provisioning_failed(
-    db: AsyncSession, service: Service, exc: Exception
-) -> None:
+async def _mark_provisioning_failed(db: AsyncSession, service: Service, exc: Exception) -> None:
+    metadata = dict(service.metadata_json or {})
+    attempts = int(metadata.get("provision_attempts", 0))
     service.status = "provisioning_failed"
     service.metadata_json = {
-        **(service.metadata_json or {}),
+        **metadata,
+        "provision_attempts": attempts,
         "last_error": type(exc).__name__,
-        "retryable": True,
+        "retryable": attempts < MAX_PROVISION_RETRIES,
         "failed_at": datetime.now(UTC).isoformat(),
     }
     await db.flush()
@@ -94,13 +93,22 @@ async def provision_service_for_order(
             tenant_id=tenant_id,
             user_id=user_id,
             status="provisioning",
-            metadata_json=metadata,
+            metadata_json={**metadata, "provision_attempts": 1},
         )
         db.add(service)
         await db.flush()
     else:
+        old = dict(service.metadata_json or {})
+        attempts = int(old.get("provision_attempts", 0))
+        if attempts >= MAX_PROVISION_RETRIES:
+            raise ValueError("provision_retry_limit_reached")
         service.status = "provisioning"
-        service.metadata_json = {**(service.metadata_json or {}), **metadata}
+        service.metadata_json = {
+            **old,
+            **metadata,
+            "provision_attempts": attempts + 1,
+            "retryable": False,
+        }
 
     try:
         user = await db.get(User, user_id)
@@ -161,9 +169,7 @@ async def renew_service(
         raise ValueError("service_external_id_missing")
 
     now = datetime.now(UTC)
-    current_expiry = (
-        service.expires_at if service.expires_at and service.expires_at > now else now
-    )
+    current_expiry = service.expires_at if service.expires_at and service.expires_at > now else now
     new_expiry = current_expiry + timedelta(days=duration_days)
     payload = {"expire": int(new_expiry.timestamp())}
     if quota_gb is not None:
@@ -203,9 +209,7 @@ async def renew_service(
 
 
 async def revoke_service(db: AsyncSession, *, tenant_id: int, service_id: int) -> Service:
-    service = await db.scalar(
-        select(Service).where(Service.id == service_id, Service.tenant_id == tenant_id)
-    )
+    service = await db.scalar(select(Service).where(Service.id == service_id, Service.tenant_id == tenant_id))
     if service is None:
         raise ValueError("service_not_found")
     if service.status in {"revoked", "refunded", "expired"}:
@@ -218,20 +222,13 @@ async def revoke_service(db: AsyncSession, *, tenant_id: int, service_id: int) -
     )
     await client.delete_user(service.external_id)
     service.status = "revoked"
-    service.metadata_json = {
-        **(service.metadata_json or {}),
-        "revoked_at": datetime.now(UTC).isoformat(),
-    }
+    service.metadata_json = {**(service.metadata_json or {}), "revoked_at": datetime.now(UTC).isoformat()}
     await db.flush()
     return service
 
 
-async def get_service_subscription(
-    db: AsyncSession, *, tenant_id: int, service_id: int
-) -> object:
-    service = await db.scalar(
-        select(Service).where(Service.id == service_id, Service.tenant_id == tenant_id)
-    )
+async def get_service_subscription(db: AsyncSession, *, tenant_id: int, service_id: int) -> object:
+    service = await db.scalar(select(Service).where(Service.id == service_id, Service.tenant_id == tenant_id))
     if service is None:
         raise ValueError("service_not_found")
     if not service.external_id:
