@@ -16,7 +16,11 @@ async def list_tenants(
     claims=Depends(require_permission("tenants.read")),
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(Tenant).where(Tenant.is_deleted.is_(False)).order_by(Tenant.created_at.desc())
+    query = (
+        select(Tenant)
+        .where(Tenant.is_deleted.is_(False))
+        .order_by(Tenant.created_at.desc())
+    )
     if not claims.get("is_platform_owner"):
         query = query.where(Tenant.id == int(claims["tenant_id"]))
     result = await db.execute(query)
@@ -35,11 +39,20 @@ async def get_tenant(
     if "tenants.read" not in claims.get("permissions", []):
         raise HTTPException(403, "forbidden")
     require_tenant_match(tenant_id, claims)
-    tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.is_deleted.is_(False)))
+    tenant = await db.scalar(
+        select(Tenant).where(
+            Tenant.id == tenant_id,
+            Tenant.is_deleted.is_(False),
+        )
+    )
     if not tenant:
         raise HTTPException(404, "tenant not found")
-    branding = await db.scalar(select(TenantBranding).where(TenantBranding.tenant_id == tenant.id))
-    tenant_settings = await db.scalar(select(TenantSettings).where(TenantSettings.tenant_id == tenant.id))
+    branding = await db.scalar(
+        select(TenantBranding).where(TenantBranding.tenant_id == tenant.id)
+    )
+    tenant_settings = await db.scalar(
+        select(TenantSettings).where(TenantSettings.tenant_id == tenant.id)
+    )
     return {
         "id": tenant.id,
         "slug": tenant.slug,
