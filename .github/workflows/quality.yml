@@ -34,7 +34,7 @@ jobs:
       CENTRAL_BOT_TOKEN: test-central-token
       TELEGRAM_WEBHOOK_SECRET: test-webhook-secret
       CORS_ORIGINS: http://localhost:5173
-      PYTHONPATH: .
+      PYTHONPATH: ${{ github.workspace }}/backend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -42,10 +42,10 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: python -m compileall -q app tests
+      - run: PYTHONPATH="$GITHUB_WORKSPACE/backend" alembic upgrade head
+      - run: PYTHONPATH="$GITHUB_WORKSPACE/backend" alembic downgrade base
+      - run: PYTHONPATH="$GITHUB_WORKSPACE/backend" alembic upgrade head
       - run: pytest -q
-      - run: cd backend && PYTHONPATH=. alembic upgrade head
-      - run: cd backend && PYTHONPATH=. alembic downgrade base
-      - run: cd backend && PYTHONPATH=. alembic upgrade head
       - run: ruff check app tests
 
   frontend:
