@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import bearer, require_tenant_match
 from app.core.db import get_db
 from app.services.coupons import calculate_coupon_for_order
 from app.wallet_coupon_referral_contract import money
@@ -13,8 +14,10 @@ async def validate_coupon(
     tenant_id: int,
     code: str,
     subtotal: float,
+    claims=Depends(bearer),
     db: AsyncSession = Depends(get_db),
 ):
+    require_tenant_match(tenant_id, claims)
     try:
         coupon, discount = await calculate_coupon_for_order(
             db,
@@ -36,5 +39,4 @@ async def validate_coupon(
     }
 
 
-# Compatibility export used by app.main
 r = router
