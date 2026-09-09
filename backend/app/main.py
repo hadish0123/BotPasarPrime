@@ -36,14 +36,21 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
-        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=()",
+        )
         if settings.app_env.lower() in {"production", "prod"}:
-            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+            response.headers.setdefault(
+                "Strict-Transport-Security",
+                "max-age=31536000; includeSubDomains",
+            )
         return response
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    settings.validate_runtime()
     await runtime.start_approved_bots()
     try:
         yield
@@ -62,16 +69,40 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[x.strip() for x in settings.cors_origins.split(",") if x.strip()],
+    allow_origins=[
+        item.strip()
+        for item in settings.cors_origins.split(",")
+        if item.strip()
+    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Telegram-Init-Data"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Idempotency-Key",
+        "X-Telegram-Init-Data",
+    ],
 )
 
 for router in (
-    health_router, auth_router, tenants_router, products_router, orders_router,
-    payments_router, wallet_router, coupons_router, tickets_router, admin_router,
-    approvals_router, audit_router, bots_router, miniapp_router, referrals_router,
-    users_router, settings_router, notifications_router, reports_router,
+    health_router,
+    auth_router,
+    tenants_router,
+    products_router,
+    orders_router,
+    payments_router,
+    wallet_router,
+    coupons_router,
+    tickets_router,
+    admin_router,
+    approvals_router,
+    audit_router,
+    bots_router,
+    miniapp_router,
+    referrals_router,
+    users_router,
+    settings_router,
+    notifications_router,
+    reports_router,
 ):
     app.include_router(router, prefix="/api/v1")
