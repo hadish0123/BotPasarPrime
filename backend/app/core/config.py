@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     pasarguard_timeout_seconds: float = 15
     pasarguard_base_url: str = ""
     pasarguard_api_token: str = ""
+    manual_payment_card_number: str = ""
+    manual_payment_card_holder: str = ""
     log_level: str = "INFO"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
