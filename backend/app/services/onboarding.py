@@ -10,23 +10,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.models.entities import (
-    ApprovalRequest,
-    BotInstance,
-    Role,
-    Tenant,
-    TenantBranding,
-    TenantCredential,
-    TenantSettings,
-    TenantUser,
-    TenantUserRole,
-    User,
-)
+from app.models.entities import ApprovalRequest, BotInstance, Role, Tenant, TenantBranding, TenantCredential, TenantSettings, TenantUser, TenantUserRole, User
 from app.models.onboarding import OnboardingPayment
 from app.pasarguard.base import PasarGuardCredentials
 from app.pasarguard.client import PasarGuardClient
 from app.security.crypto import box
 from app.services.notifications import enqueue
+from app.api.routers.settings import get_platform_payment_config
 
 VALID_PATHS = {"primevpn_representative", "personal_panel"}
 
@@ -99,7 +89,6 @@ async def create_onboarding(db: AsyncSession, *, telegram_id: int, username: str
         if tenant is None or approval is None:
             raise ValueError("invalid onboarding idempotency record")
         return tenant, approval
-
     api_token = api_token.strip()
     login_url = await validate_url(login_url)
     pasarguard_username = pasarguard_username.strip()
@@ -111,23 +100,18 @@ async def create_onboarding(db: AsyncSession, *, telegram_id: int, username: str
         raise ValueError("pasarguard username is required")
     if not bot_name or len(bot_name) > 100:
         raise ValueError("invalid bot name")
-
     slug = normalize_slug(slug)
     name = name.strip()
     if not name:
         raise ValueError("tenant name is required")
     if await db.scalar(select(Tenant).where(Tenant.slug == slug, Tenant.is_deleted.is_(False))) is not None:
         raise ValueError("tenant slug already exists")
-
-    health = await PasarGuardClient(
-        PasarGuardCredentials(base_url=login_url, api_token=api_token, username=pasarguard_username),
-        timeout_seconds=settings.pasarguard_timeout_seconds,
-    ).health()
+    health = await PasarGuardClient(PasarGuardCredentials(base_url=login_url, api_token=api_token, username=pasarguard_username), timeout_seconds=settings.pasarguard_timeout_seconds).health()
     if not health.ok:
         raise ValueError("PasarGuard health check failed")
-
     user = await get_user(db, telegram_id, username, first_name)
-    fee = activation_fee(path)
+    platform_payment = await get_platform_payment_config(db)
+    fee = int(platform_payment["activation_fee_toman"]) if path == "personal_panel" else 0
     tenant = Tenant(slug=slug, name=name, status=("pending_review" if not fee else "awaiting_payment"))
     db.add(tenant)
     await db.flush()
@@ -165,7 +149,7 @@ async def submit_activation_payment(db: AsyncSession, *, payment_id: int, telegr
         raise ValueError("onboarding payment not found")
     if payment.status not in {"awaiting_payment", "submitted"}:
         raise ValueError("onboarding payment is not awaiting payment")
-    payment.reference = reference
+    payment.reference = reference[:255]
     payment.status = "submitted"
     approval = await db.scalar(select(ApprovalRequest).where(ApprovalRequest.tenant_id == payment.tenant_id, ApprovalRequest.status == "awaiting_payment"))
     if approval:
@@ -180,5 +164,5 @@ async def submit_activation_payment(db: AsyncSession, *, payment_id: int, telegr
     return payment
 
 
-def activation_fee(path: str) -> int:
-    return int(settings.activation_fee_toman) if path == "personal_panel" else 0
+def activation_fee(path: str, configured_fee: int | None = None) -> int:
+    return int(configured_fee if configured_fee is not None else settings.activation_fee_toman) if path == "personal_panel" else 0
