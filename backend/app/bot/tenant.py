@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import StrEnum
 from typing import Final
 from uuid import uuid4
@@ -22,6 +23,16 @@ from app.services.manual_payment import (
 from app.services.purchase import create_direct_payment, fulfill_verified_payment, purchase_with_wallet
 from app.services.shop import get_product
 from app.services.tenant_activation import get_or_create_user
+from app.services.wallet import get_or_create_wallet
+from app.services.wallet_topup import (
+    MAX_TOPUP_TOMAN,
+    MIN_TOPUP_TOMAN,
+    create_wallet_topup_payment,
+    credit_verified_wallet_topup,
+    get_pending_wallet_topup_for_user,
+    submit_wallet_topup_receipt,
+    validate_topup_amount,
+)
 
 
 class TenantBotSection(StrEnum):
@@ -115,8 +126,8 @@ def admin_menu() -> InlineKeyboardMarkup:
 def payment_review_keyboard(tenant_id: int, payment_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[
-            InlineKeyboardButton("✅ تأیید و ارسال کانفیگ", callback_data=f"payment:approve:{tenant_id}:{payment_id}"),
-            InlineKeyboardButton("❌ رد پرداخت", callback_data=f"payment:reject:{tenant_id}:{payment_id}"),
+            InlineKeyboardButton("✅ تأیید", callback_data=f"payment:approve:{tenant_id}:{payment_id}"),
+            InlineKeyboardButton("❌ رد", callback_data=f"payment:reject:{tenant_id}:{payment_id}"),
         ]]
     )
 
@@ -124,6 +135,40 @@ def payment_review_keyboard(tenant_id: int, payment_id: int) -> InlineKeyboardMa
 async def _tenant_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message:
         await update.message.reply_text("👋 خوش آمدید.\n\nاز منوی زیر سرویس موردنظر خود را انتخاب کنید.", reply_markup=user_menu())
+
+
+async def _wallet_topup_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.message.text or not context.user_data.get("wallet_topup_waiting"):
+        return
+    tenant_id = int(context.application.bot_data["tenant_id"])
+    telegram_id = int(update.effective_user.id)
+    raw = update.message.text.strip()
+    try:
+        amount = validate_topup_amount(raw)
+        async with SessionLocal() as db:
+            user = await get_or_create_user(db, telegram_id=telegram_id, username=update.effective_user.username, first_name=update.effective_user.first_name)
+            order, payment, card_number, card_holder = await create_wallet_topup_payment(db, tenant_id=tenant_id, user=user, amount=amount)
+            await db.commit()
+        context.user_data["wallet_topup_waiting"] = False
+        holder_line = f"👤 به نام: {card_holder}\n" if card_holder else ""
+        await update.message.reply_text(
+            f"💳 شارژ کیف پول\n\n💰 مبلغ: {payment.amount} تومان\n🏦 شماره کارت:\n`{card_number}`\n{holder_line}\n\n1️⃣ مبلغ دقیق بالا را واریز کنید.\n2️⃣ عکس رسید را همینجا ارسال کنید.\n3️⃣ پس از تأیید ادمین، مبلغ به کیف پول شما اضافه می‌شود.\n\n⚠️ تا تأیید ادمین، موجودی تغییر نمی‌کند.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data=TenantBotSection.WALLET.value)]]),
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if message == "manual_payment_card_not_configured":
+            text = "❌ شماره کارت پرداخت هنوز توسط ادمین تنظیم نشده است."
+        elif message == "wallet_topup_amount_out_of_range":
+            text = "❌ مبلغ باید بین ۱۰٬۰۰۰ تا ۱۰٬۰۰۰٬۰۰۰ تومان باشد."
+        elif message == "wallet_topup_amount_must_be_integer":
+            text = "❌ مبلغ را به‌صورت عدد صحیح تومان وارد کنید."
+        else:
+            text = "❌ مبلغ واردشده معتبر نیست."
+        await update.message.reply_text(text)
+    except Exception:
+        await update.message.reply_text("❌ ایجاد درخواست شارژ کیف پول انجام نشد. لطفاً دوباره تلاش کنید.")
 
 
 async def _purchase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -138,6 +183,26 @@ async def _purchase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     async with SessionLocal() as db:
         user = await get_or_create_user(db, telegram_id=telegram_id, username=query.from_user.username, first_name=query.from_user.first_name)
 
+        if data == TenantBotSection.WALLET.value:
+            wallet = await get_or_create_wallet(db, tenant_id, user.id)
+            await db.commit()
+            await query.edit_message_text(
+                f"💰 کیف پول شما\n\n💵 موجودی: {wallet.balance} تومان\n\nمبلغ شارژ را خودتان وارد کنید.\nحداقل: ۱۰٬۰۰۰ تومان\nحداکثر: ۱۰٬۰۰۰٬۰۰۰ تومان",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("➕ شارژ کیف پول", callback_data="wallet:topup")],
+                    [InlineKeyboardButton("🔙 بازگشت", callback_data="purchase:back")],
+                ]),
+            )
+            return
+
+        if data == "wallet:topup":
+            context.user_data["wallet_topup_waiting"] = True
+            await query.edit_message_text(
+                "💳 مبلغ موردنظر برای شارژ کیف پول را به تومان ارسال کنید.\n\nحداقل: ۱۰٬۰۰۰ تومان\nحداکثر: ۱۰٬۰۰۰٬۰۰۰ تومان\n\nمثال: 500000",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data=TenantBotSection.WALLET.value)]]),
+            )
+            return
+
         if data == TenantBotSection.PURCHASE.value:
             products = (await db.scalars(select(Product).where(Product.tenant_id == tenant_id, Product.active.is_(True)).order_by(Product.id))).all()
             if not products:
@@ -149,6 +214,7 @@ async def _purchase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
 
         if data == "purchase:back":
+            context.user_data["wallet_topup_waiting"] = False
             await query.edit_message_text("منوی اصلی", reply_markup=user_menu())
             return
 
@@ -173,7 +239,6 @@ async def _purchase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if not plan:
                 await query.edit_message_text("❌ پلن پیدا نشد.", reply_markup=user_menu())
                 return
-            context.user_data["purchase_plan_id"] = plan.id
             await query.edit_message_text(
                 f"🧾 پلن: {plan.name}\n💰 مبلغ: {plan.price} تومان\n⏳ مدت: {plan.duration_days} روز\n📦 حجم: {plan.quota_gb or 0} GB\n\nروش پرداخت را انتخاب کنید:",
                 reply_markup=InlineKeyboardMarkup([
@@ -212,10 +277,8 @@ async def _purchase_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 )
             except ValueError as exc:
                 await db.rollback()
-                if str(exc) == "manual_payment_card_not_configured":
-                    await query.edit_message_text("❌ شماره کارت پرداخت هنوز توسط ادمین تنظیم نشده است.", reply_markup=user_menu())
-                else:
-                    await query.edit_message_text("❌ ایجاد پرداخت انجام نشد.", reply_markup=user_menu())
+                text = "❌ شماره کارت پرداخت هنوز توسط ادمین تنظیم نشده است." if str(exc) == "manual_payment_card_not_configured" else "❌ ایجاد پرداخت انجام نشد."
+                await query.edit_message_text(text, reply_markup=user_menu())
             except Exception:
                 await db.rollback()
                 await query.edit_message_text("❌ ایجاد پرداخت انجام نشد.", reply_markup=user_menu())
@@ -229,9 +292,12 @@ async def _payment_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     telegram_id = int(update.effective_user.id)
     async with SessionLocal() as db:
         user = await get_or_create_user(db, telegram_id=telegram_id, username=update.effective_user.username, first_name=update.effective_user.first_name)
-        payment = await get_pending_manual_payment_for_user(db, tenant_id=tenant_id, user_id=user.id)
+        wallet_payment = await get_pending_wallet_topup_for_user(db, tenant_id=tenant_id, user_id=user.id)
+        purchase_payment = await get_pending_manual_payment_for_user(db, tenant_id=tenant_id, user_id=user.id)
+        payment_kind = "wallet_topup" if wallet_payment else "purchase"
+        payment = wallet_payment or purchase_payment
         if not payment:
-            await update.message.reply_text("ℹ️ پرداخت مستقیم در انتظار رسیدی از شما وجود ندارد.")
+            await update.message.reply_text("ℹ️ پرداختی در انتظار رسید از شما وجود ندارد.")
             return
         photo = update.message.photo[-1]
         caption = (update.message.caption or "").strip()
@@ -239,12 +305,16 @@ async def _payment_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if caption:
             reference = f"{reference}|{caption[:70]}"
         try:
-            payment = await submit_manual_receipt(db, tenant_id=tenant_id, user_id=user.id, receipt_reference=reference)
+            if payment_kind == "wallet_topup":
+                payment = await submit_wallet_topup_receipt(db, tenant_id=tenant_id, user_id=user.id, receipt_reference=reference)
+            else:
+                payment = await submit_manual_receipt(db, tenant_id=tenant_id, user_id=user.id, receipt_reference=reference)
             owner_id = await get_tenant_owner_telegram_id(db, tenant_id)
             order = await db.scalar(select(Order).where(Order.id == payment.order_id, Order.tenant_id == tenant_id))
             await db.commit()
-            await update.message.reply_text("✅ رسید دریافت شد و برای ادمین ارسال شد.\n\nپس از بررسی و تأیید، لینک اشتراک برای شما ارسال می‌شود.", reply_markup=user_menu())
-            owner_caption = f"💳 رسید پرداخت جدید\n\n🏢 Tenant: {tenant_id}\n🧾 سفارش: #{order.id if order else payment.order_id}\n💰 مبلغ: {payment.amount} تومان\n👤 مشتری: @{update.effective_user.username or 'بدون_نام'}\n🆔 Telegram ID: {telegram_id}\n\nبرای تأیید یا رد پرداخت از دکمه‌های زیر استفاده کنید."
+            await update.message.reply_text("✅ رسید دریافت شد و برای ادمین ارسال شد.\n\nپس از بررسی و تأیید، نتیجه برای شما ارسال می‌شود.", reply_markup=user_menu())
+            title = "💰 رسید شارژ کیف پول جدید" if payment_kind == "wallet_topup" else "💳 رسید پرداخت سفارش جدید"
+            owner_caption = f"{title}\n\n🏢 Tenant: {tenant_id}\n🧾 سفارش: #{order.id if order else payment.order_id}\n💰 مبلغ: {payment.amount} تومان\n👤 مشتری: @{update.effective_user.username or 'بدون_نام'}\n🆔 Telegram ID: {telegram_id}\n\nبرای بررسی پرداخت از دکمه‌های زیر استفاده کنید."
             await context.bot.send_photo(chat_id=owner_id, photo=photo.file_id, caption=owner_caption, reply_markup=payment_review_keyboard(tenant_id, payment.id))
         except Exception:
             await db.rollback()
@@ -269,13 +339,23 @@ async def _payment_review_callback(update: Update, context: ContextTypes.DEFAULT
             payment = await verify_manual_payment(db, tenant_id=tenant_id, payment_id=payment_id, actor_telegram_id=query.from_user.id, approve=parts[1] == "approve")
             customer = await payment_customer(db, tenant_id=tenant_id, payment_id=payment_id)
             if parts[1] == "approve":
-                service = await fulfill_verified_payment(db, tenant_id=tenant_id, payment_id=payment_id)
-                order = await db.scalar(select(Order).where(Order.id == payment.order_id, Order.tenant_id == tenant_id))
-                await db.commit()
-                subscription_url = service.metadata_json.get("subscription_url")
-                await query.edit_message_caption(caption=f"✅ پرداخت #{payment_id} تأیید شد.\n\nسرویس ساخته و لینک اشتراک صادر شد.")
-                if customer and subscription_url:
-                    await context.bot.send_message(customer.telegram_id, f"🎉 پرداخت شما تأیید شد و سرویس فعال شد.\n\n🧾 سفارش: #{order.id if order else payment.order_id}\n\n🔗 لینک اشتراک:\n{subscription_url}", disable_web_page_preview=True)
+                if payment.provider == "wallet_topup_manual":
+                    amount = await credit_verified_wallet_topup(db, tenant_id=tenant_id, payment_id=payment_id)
+                    await db.commit()
+                    await query.edit_message_caption(caption=f"✅ شارژ کیف پول #{payment_id} تأیید شد.\n\n💰 مبلغ {amount} تومان به کیف پول مشتری اضافه شد.")
+                    if customer:
+                        wallet = await get_or_create_wallet(db, tenant_id, customer.id)
+                        balance = wallet.balance
+                        await db.rollback()
+                        await context.bot.send_message(customer.telegram_id, f"🎉 شارژ کیف پول شما تأیید شد.\n\n💰 مبلغ افزوده‌شده: {amount} تومان\n💵 موجودی فعلی: {balance} تومان", disable_web_page_preview=True)
+                else:
+                    service = await fulfill_verified_payment(db, tenant_id=tenant_id, payment_id=payment_id)
+                    order = await db.scalar(select(Order).where(Order.id == payment.order_id, Order.tenant_id == tenant_id))
+                    await db.commit()
+                    subscription_url = service.metadata_json.get("subscription_url")
+                    await query.edit_message_caption(caption=f"✅ پرداخت #{payment_id} تأیید شد.\n\nسرویس ساخته و لینک اشتراک صادر شد.")
+                    if customer and subscription_url:
+                        await context.bot.send_message(customer.telegram_id, f"🎉 پرداخت شما تأیید شد و سرویس فعال شد.\n\n🧾 سفارش: #{order.id if order else payment.order_id}\n\n🔗 لینک اشتراک:\n{subscription_url}", disable_web_page_preview=True)
             else:
                 await db.commit()
                 await query.edit_message_caption(caption=f"❌ پرداخت #{payment_id} رد شد.\n\nمشتری باید با پشتیبانی یا ادمین پیگیری کند.")
@@ -298,8 +378,9 @@ def build_tenant_application(*, token: str, tenant_id: int, bot_instance_id: int
     application.bot_data["bot_instance_id"] = int(bot_instance_id)
     application.add_handler(CommandHandler("start", _tenant_start))
     application.add_handler(CallbackQueryHandler(_payment_review_callback, pattern=r"^payment:(approve|reject):\d+:\d+$"))
-    application.add_handler(CallbackQueryHandler(_purchase_callback, pattern=r"^(tenant:purchase|purchase:.*)$"))
+    application.add_handler(CallbackQueryHandler(_purchase_callback, pattern=r"^(tenant:purchase|tenant:wallet|wallet:topup|purchase:.*)$"))
     application.add_handler(MessageHandler(filters.PHOTO, _payment_receipt))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _wallet_topup_amount))
     return application
 
 
