@@ -36,7 +36,6 @@ async def create_wallet_topup_payment(
 ) -> tuple[Order, Payment, str, str]:
     topup_amount = validate_topup_amount(amount)
     card_number, card_holder = await get_manual_card_details(db)
-
     idempotency_key = f"wallet-topup:{tenant_id}:{user.id}:{uuid4().hex}"
     order = Order(
         tenant_id=tenant_id,
@@ -47,7 +46,6 @@ async def create_wallet_topup_payment(
     )
     db.add(order)
     await db.flush()
-
     payment = await create_payment(
         db,
         tenant_id=tenant_id,
@@ -62,11 +60,40 @@ async def create_wallet_topup_payment(
     return order, payment, card_number, card_holder
 
 
+async def get_pending_wallet_topup_for_user(
+    db: AsyncSession, *, tenant_id: int, user_id: int
+) -> Payment | None:
+    return await db.scalar(
+        select(Payment)
+        .join(Order, Order.id == Payment.order_id)
+        .where(
+            Payment.tenant_id == tenant_id,
+            Payment.provider == "wallet_topup_manual",
+            Payment.status == "awaiting_payment",
+            Order.tenant_id == tenant_id,
+            Order.user_id == user_id,
+        )
+        .order_by(Payment.id.desc())
+    )
+
+
+async def submit_wallet_topup_receipt(
+    db: AsyncSession, *, tenant_id: int, user_id: int, receipt_reference: str
+) -> Payment:
+    reference = (receipt_reference or "").strip()
+    if not reference or len(reference) > 150:
+        raise ValueError("invalid_receipt_reference")
+    payment = await get_pending_wallet_topup_for_user(db, tenant_id=tenant_id, user_id=user_id)
+    if not payment:
+        raise ValueError("pending_wallet_topup_not_found")
+    transition(payment, "submitted")
+    payment.reference = reference
+    await db.flush()
+    return payment
+
+
 async def credit_verified_wallet_topup(
-    db: AsyncSession,
-    *,
-    tenant_id: int,
-    payment_id: int,
+    db: AsyncSession, *, tenant_id: int, payment_id: int
 ) -> Decimal:
     payment = await db.scalar(
         select(Payment).where(
@@ -77,21 +104,15 @@ async def credit_verified_wallet_topup(
     )
     if not payment or payment.status != "paid":
         raise ValueError("wallet_topup_payment_not_paid")
-
     order = await db.scalar(
-        select(Order).where(
-            Order.id == payment.order_id,
-            Order.tenant_id == tenant_id,
-        )
+        select(Order).where(Order.id == payment.order_id, Order.tenant_id == tenant_id)
     )
     if not order:
         raise ValueError("wallet_topup_order_not_found")
-
     amount = validate_topup_amount(order.total)
     user = await db.scalar(select(User).where(User.id == order.user_id))
     if not user:
         raise ValueError("wallet_topup_user_not_found")
-
     await post_wallet_transaction(
         db,
         tenant_id=tenant_id,
@@ -107,10 +128,7 @@ async def credit_verified_wallet_topup(
 
 
 async def wallet_topup_customer(
-    db: AsyncSession,
-    *,
-    tenant_id: int,
-    payment_id: int,
+    db: AsyncSession, *, tenant_id: int, payment_id: int
 ) -> User | None:
     payment = await db.scalar(
         select(Payment).where(
@@ -121,7 +139,12 @@ async def wallet_topup_customer(
     )
     if not payment:
         return None
-    return await db.scalar(select(User).where(User.id == select(Order.user_id).where(Order.id == payment.order_id).scalar_subquery()))
+    return await db.scalar(
+        select(User).join(Order, Order.user_id == User.id).where(
+            Order.id == payment.order_id,
+            Order.tenant_id == tenant_id,
+        )
+    )
 
 
 async def wallet_topup_owner(db: AsyncSession, tenant_id: int) -> int:
