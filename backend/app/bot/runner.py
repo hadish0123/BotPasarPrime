@@ -1,4 +1,5 @@
 import logging
+import os
 
 from app.bot.central import build_application
 from app.runtime_version import RUNTIME_VERSION
@@ -12,7 +13,11 @@ log = logging.getLogger("3xshop.telegram")
 
 
 def main():
-    app = build_application()
+    token = os.getenv("CENTRAL_BOT_TOKEN")
+    if not token:
+        raise RuntimeError("CENTRAL_BOT_TOKEN is not configured")
+
+    app = build_application(token)
 
     log.info("3XSHOP Central Bot starting | runtime=%s", RUNTIME_VERSION)
 
