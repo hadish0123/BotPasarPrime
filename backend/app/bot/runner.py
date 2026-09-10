@@ -1,6 +1,7 @@
 import logging
 
 from app.bot.central import build_application
+from app.runtime_version import RUNTIME_VERSION
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,7 +14,7 @@ log = logging.getLogger("3xshop.telegram")
 def main():
     app = build_application()
 
-    log.info("3XSHOP Central Bot starting")
+    log.info("3XSHOP Central Bot starting | runtime=%s", RUNTIME_VERSION)
 
     app.run_polling(
         allowed_updates=[
