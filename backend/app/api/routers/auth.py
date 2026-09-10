@@ -90,6 +90,7 @@ async def _global_claims(telegram_id: int, user_id: int, raw_user: dict) -> dict
         "user_id": user_id,
         "username": raw_user.get("username"),
         "tenant_id": None,
+        "role": None,
         "permissions": ["auth.telegram"],
         "is_platform_owner": False,
     }
