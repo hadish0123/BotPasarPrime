@@ -5,6 +5,7 @@ import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Bot
 
@@ -15,12 +16,10 @@ log = logging.getLogger("3xshop.notifications")
 
 
 async def enqueue(db: AsyncSession, tenant_id, user_id, kind, title, body, key):
-    existing = await db.scalar(select(Notification).where(Notification.idempotency_key == key))
-    if existing:
-        return False
-
-    db.add(
-        Notification(
+    """Queue a notification exactly once, even under concurrent workers."""
+    stmt = (
+        insert(Notification)
+        .values(
             tenant_id=tenant_id,
             user_id=user_id,
             kind=kind,
@@ -28,8 +27,11 @@ async def enqueue(db: AsyncSession, tenant_id, user_id, kind, title, body, key):
             body=body,
             idempotency_key=key,
         )
+        .on_conflict_do_nothing(index_elements=[Notification.idempotency_key])
+        .returning(Notification.id)
     )
-    return True
+    inserted_id = await db.scalar(stmt)
+    return inserted_id is not None
 
 
 async def deliver_pending(db: AsyncSession, *, limit: int = 50) -> int:
