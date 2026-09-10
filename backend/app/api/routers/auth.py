@@ -31,7 +31,11 @@ async def _upsert_user(telegram_id: int, raw_user: dict) -> int:
     async with SessionLocal() as db:
         user = await db.scalar(select(User).where(User.telegram_id == telegram_id))
         if user is None:
-            user = User(telegram_id=telegram_id, username=raw_user.get("username"), first_name=raw_user.get("first_name"))
+            user = User(
+                telegram_id=telegram_id,
+                username=raw_user.get("username"),
+                first_name=raw_user.get("first_name"),
+            )
             db.add(user)
             await db.flush()
         else:
@@ -42,13 +46,18 @@ async def _upsert_user(telegram_id: int, raw_user: dict) -> int:
     return user_id
 
 
-async def _tenant_roles_and_permissions(db, tenant_id: int, user_id: int) -> tuple[list[str], set[str]]:
+async def _tenant_roles_and_permissions(
+    db, tenant_id: int, user_id: int
+) -> tuple[list[str], set[str]]:
     result = await db.execute(
         select(Role.name, Permission.key)
         .join(TenantUserRole, TenantUserRole.role_id == Role.id)
         .join(RolePermission, RolePermission.role_id == Role.id)
         .join(Permission, Permission.id == RolePermission.permission_id)
-        .where(TenantUserRole.tenant_id == tenant_id, TenantUserRole.user_id == user_id)
+        .where(
+            TenantUserRole.tenant_id == tenant_id,
+            TenantUserRole.user_id == user_id,
+        )
     )
     rows = result.all()
     role_names = list(dict.fromkeys(name for name, _ in rows))
@@ -58,18 +67,57 @@ async def _tenant_roles_and_permissions(db, tenant_id: int, user_id: int) -> tup
     return role_names, permissions
 
 
+async def _global_claims(telegram_id: int, user_id: int, raw_user: dict) -> dict:
+    """Build safe global claims for platform-owner Telegram sessions.
+
+    Tenant-scoped admins must authenticate through the tenant endpoint so their
+    token always carries an explicit tenant context. The platform owner is the
+    only identity that receives global administrative permissions here.
+    """
+    if settings.owner_telegram_id and telegram_id == settings.owner_telegram_id:
+        permissions = permissions_for_role("Owner") | {"auth.telegram"}
+        return {
+            "telegram_id": telegram_id,
+            "user_id": user_id,
+            "username": raw_user.get("username"),
+            "tenant_id": None,
+            "role": "Owner",
+            "permissions": sorted(permissions),
+            "is_platform_owner": True,
+        }
+    return {
+        "telegram_id": telegram_id,
+        "user_id": user_id,
+        "username": raw_user.get("username"),
+        "tenant_id": None,
+        "permissions": ["auth.telegram"],
+        "is_platform_owner": False,
+    }
+
+
 @r.post("/telegram")
-async def telegram_auth(init_data: str | None = None, x_telegram_init_data: str | None = Header(default=None)):
+async def telegram_auth(
+    init_data: str | None = None,
+    x_telegram_init_data: str | None = Header(default=None),
+):
     payload = x_telegram_init_data or init_data
     if not payload:
         raise HTTPException(400, "Telegram initData is required")
     telegram_id, raw_user = await _telegram_user(payload)
     user_id = await _upsert_user(telegram_id, raw_user)
-    return {"access_token": create_token(user_id, {"telegram_id": telegram_id, "user_id": user_id, "username": raw_user.get("username"), "tenant_id": None, "permissions": ["auth.telegram"]}), "token_type": "bearer"}
+    claims = await _global_claims(telegram_id, user_id, raw_user)
+    return {
+        "access_token": create_token(user_id, claims),
+        "token_type": "bearer",
+    }
 
 
 @r.post("/telegram/{tenant_id}")
-async def tenant_telegram_auth(tenant_id: int, init_data: str | None = None, x_telegram_init_data: str | None = Header(default=None)):
+async def tenant_telegram_auth(
+    tenant_id: int,
+    init_data: str | None = None,
+    x_telegram_init_data: str | None = Header(default=None),
+):
     payload = x_telegram_init_data or init_data
     if not payload:
         raise HTTPException(400, "Telegram initData is required")
@@ -77,20 +125,58 @@ async def tenant_telegram_auth(tenant_id: int, init_data: str | None = None, x_t
     user_id = await _upsert_user(telegram_id, raw_user)
 
     async with SessionLocal() as db:
-        tenant = await db.scalar(select(Tenant).where(Tenant.id == tenant_id, Tenant.is_deleted.is_(False), Tenant.status == "active"))
+        tenant = await db.scalar(
+            select(Tenant).where(
+                Tenant.id == tenant_id,
+                Tenant.is_deleted.is_(False),
+                Tenant.status == "active",
+            )
+        )
         if not tenant:
             raise HTTPException(403, "tenant access denied")
-        membership = await db.scalar(select(TenantUser).where(TenantUser.tenant_id == tenant_id, TenantUser.user_id == user_id, TenantUser.status == "active"))
+        membership = await db.scalar(
+            select(TenantUser).where(
+                TenantUser.tenant_id == tenant_id,
+                TenantUser.user_id == user_id,
+                TenantUser.status == "active",
+            )
+        )
         if membership is None:
             membership = TenantUser(tenant_id=tenant_id, user_id=user_id, status="active")
             db.add(membership)
             await db.flush()
         role_names, permissions = await _tenant_roles_and_permissions(db, tenant_id, user_id)
-        role = next((item for item in role_names if item in {"Owner", "Admin", "Finance", "Support", "Sales", "Viewer"}), role_names[0] if role_names else "customer")
-        claims = {"telegram_id": telegram_id, "user_id": user_id, "tenant_id": tenant_id, "role": role, "permissions": sorted(permissions | {"auth.telegram"})}
-        return {"access_token": create_token(user_id, claims), "token_type": "bearer", "tenant_id": tenant_id}
+        role = next(
+            (
+                item
+                for item in role_names
+                if item in {"Owner", "Admin", "Finance", "Support", "Sales", "Viewer"}
+            ),
+            role_names[0] if role_names else "customer",
+        )
+        claims = {
+            "telegram_id": telegram_id,
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "role": role,
+            "permissions": sorted(permissions | {"auth.telegram"}),
+            "is_platform_owner": telegram_id == settings.owner_telegram_id,
+        }
+        return {
+            "access_token": create_token(user_id, claims),
+            "token_type": "bearer",
+            "tenant_id": tenant_id,
+        }
 
 
 @r.get("/me")
 async def me(claims=Depends(bearer)):
-    return {"user_id": claims.get("user_id") or claims.get("sub"), "telegram_id": claims.get("telegram_id"), "username": claims.get("username"), "tenant_id": claims.get("tenant_id"), "role": claims.get("role"), "permissions": claims.get("permissions", []), "is_platform_owner": bool(claims.get("is_platform_owner"))}
+    return {
+        "user_id": claims.get("user_id") or claims.get("sub"),
+        "telegram_id": claims.get("telegram_id"),
+        "username": claims.get("username"),
+        "tenant_id": claims.get("tenant_id"),
+        "role": claims.get("role"),
+        "permissions": claims.get("permissions", []),
+        "is_platform_owner": bool(claims.get("is_platform_owner")),
+    }
