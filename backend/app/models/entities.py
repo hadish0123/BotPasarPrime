@@ -90,12 +90,16 @@ class Role(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(50), unique=True)
     description: Mapped[str | None] = mapped_column(String(255))
+    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Permission(Base):
     __tablename__ = "permissions"
     id: Mapped[int] = mapped_column(primary_key=True)
     key: Mapped[str] = mapped_column(String(100), unique=True)
+    description: Mapped[str | None] = mapped_column(String(255))
 
 
 class AdminRole(Base):
@@ -266,10 +270,12 @@ class Service(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    plan_id: Mapped[int | None] = mapped_column(ForeignKey("plans.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
     external_id: Mapped[str | None] = mapped_column(String(150))
-    status: Mapped[str] = mapped_column(String(30))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Ticket(Base):
@@ -278,15 +284,16 @@ class Ticket(Base):
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     subject: Mapped[str] = mapped_column(String(200))
-    status: Mapped[str] = mapped_column(String(30), default="open")
+    status: Mapped[str] = mapped_column(String(30), default="open", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class TicketMessage(Base):
     __tablename__ = "ticket_messages"
     id: Mapped[int] = mapped_column(primary_key=True)
     ticket_id: Mapped[int] = mapped_column(ForeignKey("tickets.id", ondelete="CASCADE"))
-    sender_type: Mapped[str] = mapped_column(String(20))
-    body: Mapped[str] = mapped_column(Text)
+    sender_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    message: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -296,54 +303,52 @@ class Notification(Base):
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     kind: Mapped[str] = mapped_column(String(50))
-    title: Mapped[str] = mapped_column(String(200))
-    body: Mapped[str] = mapped_column(Text)
-    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    message: Mapped[str] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(String(150), unique=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class Broadcast(Base):
     __tablename__ = "broadcasts"
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
-    body: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(30), default="queued")
+    message: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id: Mapped[int] = mapped_column(primary_key=True)
-    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id"))
-    actor_type: Mapped[str] = mapped_column(String(30))
-    actor_id: Mapped[str | None] = mapped_column(String(100))
-    action: Mapped[str] = mapped_column(String(100), index=True)
+    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id"), nullable=True)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    action: Mapped[str] = mapped_column(String(100))
     target_type: Mapped[str | None] = mapped_column(String(50))
     target_id: Mapped[str | None] = mapped_column(String(100))
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
 class BotInstance(Base):
     __tablename__ = "bot_instances"
     id: Mapped[int] = mapped_column(primary_key=True)
-    tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id"))
-    name: Mapped[str] = mapped_column(String(100))
-    encrypted_token: Mapped[str] = mapped_column(Text)
-    masked_token: Mapped[str] = mapped_column(String(100))
-    status: Mapped[str] = mapped_column(String(30), default="registered")
-    heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"), unique=True)
+    name: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(30), default="registered", index=True)
+    last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_count: Mapped[int] = mapped_column(Integer, default=0)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class ApprovalRequest(Base):
     __tablename__ = "approval_requests"
     id: Mapped[int] = mapped_column(primary_key=True)
     tenant_id: Mapped[int] = mapped_column(ForeignKey("tenants.id"))
-    path: Mapped[str] = mapped_column(String(30))
-    status: Mapped[str] = mapped_column(String(30), default="pending_review")
-    reviewer_id: Mapped[str | None] = mapped_column(String(100))
-    note: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    reviewer_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
 
 
@@ -352,3 +357,4 @@ class SystemSetting(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     key: Mapped[str] = mapped_column(String(100), unique=True)
     value: Mapped[str] = mapped_column(Text)
+    encrypted: Mapped[bool] = mapped_column(Boolean, default=False)
