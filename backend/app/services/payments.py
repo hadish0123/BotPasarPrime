@@ -33,27 +33,22 @@ async def create_payment(
 ) -> Payment:
     if not tenant_id:
         raise ValueError("tenant_id is required")
-
     if not order_id:
         raise ValueError("order_id is required")
-
     if not key or len(key) > 100:
         raise ValueError("invalid idempotency key")
 
     provider = (provider or "manual").strip().lower()
-
     if provider not in {"manual", "wallet", "zarinpal", "idpay", "nextpay"}:
         raise ValueError("unsupported payment provider")
 
     amount = money(amount)
-
     old = await db.scalar(
         select(Payment).where(
             Payment.tenant_id == tenant_id,
             Payment.idempotency_key == key,
         )
     )
-
     if old:
         if Decimal(str(old.amount)) != amount:
             raise ValueError("idempotency key reused with different amount")
@@ -69,16 +64,13 @@ async def create_payment(
         status=PaymentStatus.CREATED.value,
         idempotency_key=key,
     )
-
     db.add(payment)
     await db.flush()
-
     return payment
 
 
 def transition(payment: Payment, status: str) -> Payment:
-    current = payment.status
-    validate_transition(current, status)
+    validate_transition(payment.status, status)
     payment.status = status
     return payment
 
