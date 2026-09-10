@@ -29,7 +29,9 @@ class RoleCreate(BaseModel):
 
 def _tenant_allowed(tenant_id: int | None, claims: dict) -> bool:
     if tenant_id is None:
-        return claims.get("role") == "Owner"
+        if claims.get("role") != "Owner":
+            raise HTTPException(403, "platform_owner_required")
+        return True
     require_tenant_match(tenant_id, claims)
     return True
 
@@ -39,7 +41,11 @@ async def list_admins(claims=Depends(require_permission("admins.read")), db: Asy
     result = await db.execute(select(Admin, User).join(User, User.id == Admin.user_id).order_by(Admin.id.desc()))
     rows = []
     for admin, user in result.all():
-        roles_query = select(Role.name, AdminRole.tenant_id).join(AdminRole, AdminRole.role_id == Role.id).where(AdminRole.admin_id == admin.id)
+        roles_query = (
+            select(Role.name, AdminRole.tenant_id)
+            .join(AdminRole, AdminRole.role_id == Role.id)
+            .where(AdminRole.admin_id == admin.id)
+        )
         if claims.get("role") != "Owner":
             tenant_id = claims.get("tenant_id")
             if tenant_id is None:
@@ -64,6 +70,8 @@ async def create_admin(x: AdminCreate, claims=Depends(require_permission("admins
     role = await db.scalar(select(Role).where(Role.name == x.role))
     if role is None:
         raise HTTPException(400, "role_not_found")
+    if role.tenant_id is not None and role.tenant_id != x.tenant_id:
+        raise HTTPException(403, "role_tenant_mismatch")
 
     user = await db.scalar(select(User).where(User.telegram_id == x.telegram_id))
     if user is None:
@@ -81,12 +89,24 @@ async def create_admin(x: AdminCreate, claims=Depends(require_permission("admins
     else:
         admin.active = True
 
-    existing = await db.scalar(select(AdminRole).where(AdminRole.admin_id == admin.id, AdminRole.role_id == role.id, AdminRole.tenant_id == x.tenant_id))
+    existing = await db.scalar(
+        select(AdminRole).where(
+            AdminRole.admin_id == admin.id,
+            AdminRole.role_id == role.id,
+            AdminRole.tenant_id == x.tenant_id,
+        )
+    )
     if existing is None:
         db.add(AdminRole(admin_id=admin.id, role_id=role.id, tenant_id=x.tenant_id))
 
     if x.tenant_id is not None:
-        membership = await db.scalar(select(TenantUserRole).where(TenantUserRole.tenant_id == x.tenant_id, TenantUserRole.user_id == user.id, TenantUserRole.role_id == role.id))
+        membership = await db.scalar(
+            select(TenantUserRole).where(
+                TenantUserRole.tenant_id == x.tenant_id,
+                TenantUserRole.user_id == user.id,
+                TenantUserRole.role_id == role.id,
+            )
+        )
         if membership is None:
             db.add(TenantUserRole(tenant_id=x.tenant_id, user_id=user.id, role_id=role.id))
     await db.commit()
@@ -95,14 +115,23 @@ async def create_admin(x: AdminCreate, claims=Depends(require_permission("admins
 
 @r.get("/roles")
 async def list_roles(claims=Depends(require_permission("admins.read")), db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Role).order_by(Role.name))
-    return [{
-        "id": role.id,
-        "tenant_id": None,
-        "name": role.name,
-        "description": role.description,
-        "is_system": role.name in ROLE_PERMISSIONS,
-    } for role in result.scalars().all()]
+    query = select(Role).order_by(Role.name)
+    if claims.get("role") != "Owner":
+        tenant_id = claims.get("tenant_id")
+        if tenant_id is None:
+            raise HTTPException(403, "tenant_context_required")
+        query = query.where((Role.tenant_id == tenant_id) | (Role.tenant_id.is_(None)))
+    result = await db.execute(query)
+    return [
+        {
+            "id": role.id,
+            "tenant_id": role.tenant_id,
+            "name": role.name,
+            "description": role.description,
+            "is_system": bool(role.is_system or role.name in ROLE_PERMISSIONS),
+        }
+        for role in result.scalars().all()
+    ]
 
 
 @r.post("/roles")
@@ -110,10 +139,12 @@ async def create_role(x: RoleCreate, claims=Depends(require_permission("admins.w
     _tenant_allowed(x.tenant_id, claims)
     if x.name in ROLE_PERMISSIONS:
         raise HTTPException(400, "system_role_name_reserved")
+    if x.tenant_id is None and claims.get("role") != "Owner":
+        raise HTTPException(403, "platform_owner_required")
     duplicate = await db.scalar(select(Role).where(Role.name == x.name))
     if duplicate is not None:
         raise HTTPException(409, "role_exists")
-    role = Role(name=x.name, description=x.description)
+    role = Role(name=x.name, description=x.description, tenant_id=x.tenant_id, is_system=False)
     db.add(role)
     await db.flush()
     if x.permissions:
@@ -124,4 +155,4 @@ async def create_role(x: RoleCreate, claims=Depends(require_permission("admins.w
         for permission in perms:
             db.add(RolePermission(role_id=role.id, permission_id=permission.id))
     await db.commit()
-    return {"id": role.id, "tenant_id": x.tenant_id, "name": role.name, "permissions": x.permissions}
+    return {"id": role.id, "tenant_id": role.tenant_id, "name": role.name, "permissions": x.permissions}
