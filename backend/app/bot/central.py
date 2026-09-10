@@ -9,7 +9,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 from app.core.config import settings
 from app.core.db import SessionLocal
-from app.models import ApprovalRequest, AuditLog, BotInstance, Payment, Service, Tenant, User
+from app.models import ApprovalRequest, AuditLog, BotInstance, Notification, Payment, Service, Tenant, TenantCredential, User
 from app.services.approvals import review_approval
 from app.services.tenant_activation import activate_approved_tenant, get_latest_activation
 
@@ -203,6 +203,22 @@ async def owner_payments(query) -> None:
     await query.edit_message_text(text, reply_markup=owner_menu())
 
 
+async def owner_connections(query) -> None:
+    async with SessionLocal() as db:
+        credential_rows = await db.execute(
+            select(TenantCredential.kind, func.count(TenantCredential.id)).group_by(TenantCredential.kind)
+        )
+        credentials = credential_rows.all()
+        tenants_with_credentials = await db.scalar(
+            select(func.count(func.distinct(TenantCredential.tenant_id)))
+        ) or 0
+    text = "🔌 اتصال‌های PasarGuard\n\n"
+    text += f"🏢 Tenantهای دارای اتصال: {tenants_with_credentials}\n"
+    text += "\n".join(f"• {kind}: {count}" for kind, count in credentials) if credentials else "هیچ credential ثبت نشده است."
+    text += "\n\n🔐 مقدار credentialها نمایش داده نمی‌شود."
+    await query.edit_message_text(text, reply_markup=owner_menu())
+
+
 async def owner_reports(query) -> None:
     async with SessionLocal() as db:
         payments = await db.scalar(select(func.count(Payment.id)).where(Payment.status == "paid")) or 0
@@ -210,6 +226,30 @@ async def owner_reports(query) -> None:
         active = await db.scalar(select(func.count(Service.id)).where(Service.status == "active")) or 0
     await query.edit_message_text(
         f"📈 گزارش کلی\n\n💳 پرداخت موفق: {payments}\n💰 درآمد: {revenue}\n🟢 سرویس فعال: {active}",
+        reply_markup=owner_menu(),
+    )
+
+
+async def owner_notifications(query) -> None:
+    async with SessionLocal() as db:
+        pending = await db.scalar(select(func.count(Notification.id)).where(Notification.sent_at.is_(None))) or 0
+        sent = await db.scalar(select(func.count(Notification.id)).where(Notification.sent_at.is_not(None))) or 0
+        unread = await db.scalar(select(func.count(Notification.id)).where(Notification.read_at.is_(None))) or 0
+    await query.edit_message_text(
+        f"🔔 اعلان‌ها\n\n📨 در صف ارسال: {pending}\n✅ ارسال‌شده: {sent}\n🔵 خوانده‌نشده: {unread}",
+        reply_markup=owner_menu(),
+    )
+
+
+async def owner_settings(query) -> None:
+    await query.edit_message_text(
+        "⚙️ تنظیمات سیستم\n\n"
+        f"محیط: {settings.app_env}\n"
+        f"Central Bot: {'فعال' if settings.central_bot_enabled else 'غیرفعال'}\n"
+        f"هزینه فعال‌سازی: {settings.activation_fee_toman:,} تومان\n"
+        f"Mini App: {settings.mini_app_url}\n"
+        f"نرخ محدودسازی: {settings.rate_limit_per_minute}/دقیقه\n\n"
+        "برای تغییر تنظیمات حساس از Web Admin و متغیرهای محیطی استفاده کنید.",
         reply_markup=owner_menu(),
     )
 
@@ -252,24 +292,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 if tenant is None:
                     raise ValueError("Tenant پیدا نشد")
                 if action == "owner:approve":
-                    await review_approval(
-                        db,
-                        approval_id=approval.id,
-                        approved=True,
-                        reviewer_id=str(query.from_user.id),
-                        note=None,
-                    )
+                    await review_approval(db, approval_id=approval.id, approved=True, reviewer_id=str(query.from_user.id), note=None)
                     await activate_approved_tenant(db, tenant.id)
                     await db.commit()
                     message = "✅ Tenant تأیید و فعال شد."
                 elif action == "owner:reject":
-                    await review_approval(
-                        db,
-                        approval_id=approval.id,
-                        approved=False,
-                        reviewer_id=str(query.from_user.id),
-                        note="Rejected by platform owner",
-                    )
+                    await review_approval(db, approval_id=approval.id, approved=False, reviewer_id=str(query.from_user.id), note="Rejected by platform owner")
                     await db.commit()
                     message = "❌ درخواست رد شد."
                 elif action == "owner:activate":
@@ -313,15 +341,9 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         await query.edit_message_text(text, reply_markup=main_menu())
     elif data == CentralMenu.SUPPORT.value:
-        await query.edit_message_text(
-            "💬 پشتیبانی\n\nدرخواست خود را از طریق بخش تیکت ثبت کنید.",
-            reply_markup=main_menu(),
-        )
+        await query.edit_message_text("💬 پشتیبانی\n\nدرخواست خود را از طریق بخش تیکت ثبت کنید.", reply_markup=main_menu())
     elif data == CentralMenu.HELP.value:
-        await query.edit_message_text(
-            "❓ راهنما\n\nثبت اطلاعات در Mini App امن انجام می‌شود.",
-            reply_markup=main_menu(),
-        )
+        await query.edit_message_text("❓ راهنما\n\nثبت اطلاعات در Mini App امن انجام می‌شود.", reply_markup=main_menu())
     elif data == "central:home":
         await query.edit_message_text("منوی اصلی 3XSHOP", reply_markup=main_menu())
     elif is_owner(query.from_user.id):
@@ -332,17 +354,17 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             CentralMenu.OWNER_USERS.value: owner_users,
             CentralMenu.OWNER_BOTS.value: owner_bots,
             CentralMenu.OWNER_PAYMENTS.value: owner_payments,
+            CentralMenu.OWNER_CONNECTIONS.value: owner_connections,
             CentralMenu.OWNER_REPORTS.value: owner_reports,
+            CentralMenu.OWNER_NOTIFICATIONS.value: owner_notifications,
+            CentralMenu.OWNER_SETTINGS.value: owner_settings,
             CentralMenu.OWNER_AUDIT.value: owner_audit,
         }
         handler = handlers.get(data)
         if handler:
             await handler(query)
         else:
-            await query.edit_message_text(
-                f"{data}\n\nاین بخش از پنل مدیریتی در حال تکمیل اتصال است.",
-                reply_markup=owner_menu(),
-            )
+            await query.edit_message_text("این عملیات برای مالک در دسترس نیست.", reply_markup=owner_menu())
 
 
 def build_application(token: str) -> Application:
@@ -366,10 +388,7 @@ async def start_central_bot() -> None:
         await application.stop()
         await application.shutdown()
         raise RuntimeError("central bot updater is unavailable")
-    await application.updater.start_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-    )
+    await application.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
     _central_application = application
 
 
