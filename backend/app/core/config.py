@@ -64,10 +64,6 @@ class Settings(BaseSettings):
                 raise RuntimeError("Production CORS_ORIGINS must contain explicit origins")
             if self.central_bot_enabled and not self.mini_app_url.startswith("https://"):
                 raise RuntimeError("MINI_APP_URL must be an HTTPS URL when the central bot is enabled")
-            if self.activation_fee_toman > 0 and not self.manual_payment_card_number.strip():
-                raise RuntimeError("MANUAL_PAYMENT_CARD_NUMBER is required for manual activation payments")
-            if self.activation_fee_toman > 0 and not self.manual_payment_card_holder.strip():
-                raise RuntimeError("MANUAL_PAYMENT_CARD_HOLDER is required for manual activation payments")
 
 
 settings = Settings()
