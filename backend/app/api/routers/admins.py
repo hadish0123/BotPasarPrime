@@ -36,12 +36,6 @@ def _tenant_allowed(tenant_id: int | None, claims: dict) -> bool:
     return True
 
 
-async def _find_role(db: AsyncSession, name: str, tenant_id: int | None) -> Role | None:
-    return await db.scalar(
-        select(Role).where(Role.name == name, Role.tenant_id.is_(None) if tenant_id is not None else Role.tenant_id.is_(None))
-    )
-
-
 @r.get("")
 async def list_admins(claims=Depends(require_permission("admins.read")), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Admin, User).join(User, User.id == Admin.user_id).order_by(Admin.id.desc()))
