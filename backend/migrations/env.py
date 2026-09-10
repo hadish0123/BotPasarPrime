@@ -1,14 +1,14 @@
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 
 from alembic import context
 from app.core.config import settings
+from app.core.database_url import normalize_database_url
 from app.models.entities import Base
 
 config = context.config
-config.set_main_option(
-    "sqlalchemy.url",
-    settings.database_url.replace("+aiosqlite", ""),
-)
+
+database_url = normalize_database_url(settings.database_url)
+config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = Base.metadata
 
@@ -26,9 +26,12 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section),
-        prefix="sqlalchemy.",
+    url = config.get_main_option("sqlalchemy.url")
+    if url.startswith("postgresql+asyncpg://"):
+        url = url.replace("+asyncpg", "", 1)
+
+    connectable = create_engine(
+        url,
         poolclass=pool.NullPool,
     )
 
