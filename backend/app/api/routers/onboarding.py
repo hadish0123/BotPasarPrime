@@ -14,6 +14,19 @@ from app.services.onboarding import activation_fee, create_onboarding, submit_ac
 r = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 
+def _manual_payment_details(path: str) -> dict:
+    fee = activation_fee(path)
+    if fee <= 0:
+        return {"method": "none", "amount_toman": 0}
+    return {
+        "method": "card_to_card",
+        "amount_toman": fee,
+        "card_number": settings.manual_payment_card_number,
+        "card_holder": settings.manual_payment_card_holder,
+        "bank": settings.manual_payment_bank or None,
+    }
+
+
 @r.post("")
 async def register_tenant(payload: OnboardingCreate, claims=Depends(bearer), db: AsyncSession = Depends(get_db)):
     user_id = claims.get("user_id") or claims.get("sub")
@@ -28,7 +41,18 @@ async def register_tenant(payload: OnboardingCreate, claims=Depends(bearer), db:
     except ValueError as exc:
         await db.rollback()
         raise HTTPException(400, str(exc)) from None
-    return {"tenant_id": tenant.id, "approval_id": approval.id, "status": tenant.status, "path": approval.path, "activation_fee_toman": activation_fee(approval.path), "configured_activation_fee_toman": int(settings.activation_fee_toman), "activation_payment_id": payment.id if payment else None, "activation_payment_status": payment.status if payment else "not_required", "pasarguard_health": "verified"}
+    return {
+        "tenant_id": tenant.id,
+        "approval_id": approval.id,
+        "status": tenant.status,
+        "path": approval.path,
+        "activation_fee_toman": activation_fee(approval.path),
+        "configured_activation_fee_toman": int(settings.activation_fee_toman),
+        "activation_payment_id": payment.id if payment else None,
+        "activation_payment_status": payment.status if payment else "not_required",
+        "manual_payment": _manual_payment_details(approval.path),
+        "pasarguard_health": "verified",
+    }
 
 
 @r.post("/payments/{payment_id}/submit")
