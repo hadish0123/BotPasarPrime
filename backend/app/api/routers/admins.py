@@ -140,6 +140,15 @@ async def list_roles(claims=Depends(require_permission("admins.read")), db: Asyn
     ]
 
 
+@r.get("/permissions")
+async def list_permissions(claims=Depends(require_permission("admins.read")), db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Permission).order_by(Permission.key))
+    return [
+        {"id": permission.id, "key": permission.key, "description": permission.description}
+        for permission in result.scalars().all()
+    ]
+
+
 @r.post("/roles")
 async def create_role(x: RoleCreate, claims=Depends(require_permission("admins.write")), db: AsyncSession = Depends(get_db)):
     _tenant_allowed(x.tenant_id, claims)
