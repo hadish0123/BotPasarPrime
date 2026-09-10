@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from app.core.config import settings
 from app.services import manual_payment, purchase
 from app.bot import tenant
 
@@ -27,6 +28,12 @@ def test_manual_purchase_flow_contract():
     assert hasattr(purchase, "purchase_with_wallet")
     assert hasattr(purchase, "create_direct_payment")
     assert hasattr(purchase, "fulfill_verified_payment")
+
+
+def test_manual_payment_configuration_contract():
+    assert hasattr(settings, "manual_payment_card_number")
+    assert hasattr(settings, "manual_payment_card_holder")
+    assert "manual_payment_card_not_configured" in (ROOT / "app" / "services" / "manual_payment.py").read_text(encoding="utf-8")
 
 
 def test_pasarguard_purchase_provisioning_contract():
