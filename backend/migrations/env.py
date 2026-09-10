@@ -20,27 +20,46 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
-    context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+    )
     with context.begin_transaction():
         context.run_migrations()
-
-
-async def run_async_migrations() -> None:
-    url = normalize_database_url(config.get_main_option("sqlalchemy.url"))
-    if not url.startswith("postgresql+asyncpg://"):
-        raise RuntimeError("PostgreSQL migrations require postgresql+asyncpg://")
-    connectable: AsyncEngine = create_async_engine(url, poolclass=pool.NullPool)
-    try:
-        async with connectable.connect() as connection:
-            await connection.run_sync(do_run_migrations)
-    finally:
-        await connectable.dispose()
 
 
 def do_run_migrations(connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()
+
+
+async def run_async_migrations() -> None:
+    url = normalize_database_url(config.get_main_option("sqlalchemy.url"))
+    if not url:
+        raise RuntimeError("DATABASE_URL is not configured")
+
+    if url.startswith("sqlite://") and not url.startswith("sqlite+aiosqlite://"):
+        url = url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+
+    if url.startswith("postgres://") or url.startswith("postgresql://"):
+        url = normalize_database_url(url)
+
+    if not (
+        url.startswith("postgresql+asyncpg://")
+        or url.startswith("sqlite+aiosqlite://")
+    ):
+        raise RuntimeError(
+            "Unsupported DATABASE_URL scheme; use postgresql+asyncpg:// or sqlite+aiosqlite://"
+        )
+
+    connectable: AsyncEngine = create_async_engine(url, poolclass=pool.NullPool)
+    try:
+        async with connectable.connect() as connection:
+            await connection.run_sync(do_run_migrations)
+    finally:
+        await connectable.dispose()
 
 
 def run_migrations_online() -> None:
