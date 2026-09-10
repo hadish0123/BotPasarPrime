@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str = Field(default="", repr=False)
     cors_origins: str = "http://localhost:5173"
     activation_fee_toman: int = 250000
+    manual_payment_card_number: str = ""
+    manual_payment_card_holder: str = ""
+    manual_payment_bank: str = ""
     owner_telegram_id: int | None = None
     pasarguard_timeout_seconds: float = 15
     log_level: str = "INFO"
@@ -61,6 +64,10 @@ class Settings(BaseSettings):
                 raise RuntimeError("Production CORS_ORIGINS must contain explicit origins")
             if self.central_bot_enabled and not self.mini_app_url.startswith("https://"):
                 raise RuntimeError("MINI_APP_URL must be an HTTPS URL when the central bot is enabled")
+            if self.activation_fee_toman > 0 and not self.manual_payment_card_number.strip():
+                raise RuntimeError("MANUAL_PAYMENT_CARD_NUMBER is required for manual activation payments")
+            if self.activation_fee_toman > 0 and not self.manual_payment_card_holder.strip():
+                raise RuntimeError("MANUAL_PAYMENT_CARD_HOLDER is required for manual activation payments")
 
 
 settings = Settings()
