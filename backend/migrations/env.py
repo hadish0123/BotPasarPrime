@@ -1,6 +1,11 @@
-from sqlalchemy import create_engine, pool
+from __future__ import annotations
+
+import asyncio
 
 from alembic import context
+from sqlalchemy import pool
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
 from app.core.config import settings
 from app.core.database_url import normalize_database_url
 from app.models.entities import Base
@@ -15,34 +20,31 @@ target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:
     url = config.get_main_option("sqlalchemy.url")
-    context.configure(
-        url=url,
-        target_metadata=target_metadata,
-        literal_binds=True,
-    )
+    context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
+    with context.begin_transaction():
+        context.run_migrations()
 
+
+async def run_async_migrations() -> None:
+    url = normalize_database_url(config.get_main_option("sqlalchemy.url"))
+    if not url.startswith("postgresql+asyncpg://"):
+        raise RuntimeError("PostgreSQL migrations require postgresql+asyncpg://")
+    connectable: AsyncEngine = create_async_engine(url, poolclass=pool.NullPool)
+    try:
+        async with connectable.connect() as connection:
+            await connection.run_sync(do_run_migrations)
+    finally:
+        await connectable.dispose()
+
+
+def do_run_migrations(connection) -> None:
+    context.configure(connection=connection, target_metadata=target_metadata)
     with context.begin_transaction():
         context.run_migrations()
 
 
 def run_migrations_online() -> None:
-    url = config.get_main_option("sqlalchemy.url")
-    if url.startswith("postgresql+asyncpg://"):
-        url = url.replace("+asyncpg", "", 1)
-
-    connectable = create_engine(
-        url,
-        poolclass=pool.NullPool,
-    )
-
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-        )
-
-        with context.begin_transaction():
-            context.run_migrations()
+    asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():
