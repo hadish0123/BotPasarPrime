@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,7 +33,7 @@ log = logging.getLogger("3xshop.api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     bot_application = None
-    enabled = str(getattr(settings, "central_bot_enabled", True)).strip().lower() in {"1", "true", "yes", "on"}
+    enabled = os.getenv("CENTRAL_BOT_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
     if enabled:
         token = settings.central_bot_token.strip()
         if not token:
