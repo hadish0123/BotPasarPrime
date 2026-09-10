@@ -36,6 +36,12 @@ def _tenant_allowed(tenant_id: int | None, claims: dict) -> bool:
     return True
 
 
+async def _find_role(db: AsyncSession, name: str, tenant_id: int | None) -> Role | None:
+    return await db.scalar(
+        select(Role).where(Role.name == name, Role.tenant_id.is_(None) if tenant_id is not None else Role.tenant_id.is_(None))
+    )
+
+
 @r.get("")
 async def list_admins(claims=Depends(require_permission("admins.read")), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Admin, User).join(User, User.id == Admin.user_id).order_by(Admin.id.desc()))
@@ -67,7 +73,12 @@ async def list_admins(claims=Depends(require_permission("admins.read")), db: Asy
 @r.post("")
 async def create_admin(x: AdminCreate, claims=Depends(require_permission("admins.write")), db: AsyncSession = Depends(get_db)):
     _tenant_allowed(x.tenant_id, claims)
-    role = await db.scalar(select(Role).where(Role.name == x.role))
+    role_query = select(Role).where(Role.name == x.role)
+    if x.tenant_id is not None:
+        role_query = role_query.where((Role.tenant_id == x.tenant_id) | (Role.tenant_id.is_(None)))
+    else:
+        role_query = role_query.where(Role.tenant_id.is_(None))
+    role = await db.scalar(role_query)
     if role is None:
         raise HTTPException(400, "role_not_found")
     if role.tenant_id is not None and role.tenant_id != x.tenant_id:
@@ -141,7 +152,12 @@ async def create_role(x: RoleCreate, claims=Depends(require_permission("admins.w
         raise HTTPException(400, "system_role_name_reserved")
     if x.tenant_id is None and claims.get("role") != "Owner":
         raise HTTPException(403, "platform_owner_required")
-    duplicate = await db.scalar(select(Role).where(Role.name == x.name))
+    duplicate_query = select(Role).where(Role.name == x.name)
+    if x.tenant_id is None:
+        duplicate_query = duplicate_query.where(Role.tenant_id.is_(None))
+    else:
+        duplicate_query = duplicate_query.where(Role.tenant_id == x.tenant_id)
+    duplicate = await db.scalar(duplicate_query)
     if duplicate is not None:
         raise HTTPException(409, "role_exists")
     role = Role(name=x.name, description=x.description, tenant_id=x.tenant_id, is_system=False)
