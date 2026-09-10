@@ -24,6 +24,18 @@ from app.services.shop import build_plan_snapshot, create_order_from_plan
 from app.services.wallet import post_wallet_transaction
 
 
+def _normalize_panel_base_url(value: str) -> str:
+    """Accept both the panel root URL and the common dashboard login URL."""
+    url = (value or "").strip().rstrip("/")
+    for suffix in ("/dashboard/#/login", "/dashboard", "/#/login"):
+        if url.endswith(suffix):
+            url = url[: -len(suffix)].rstrip("/")
+            break
+    if not url.startswith(("http://", "https://")):
+        raise ValueError("pasarguard_login_url_invalid")
+    return url
+
+
 async def _credentials(db: AsyncSession, tenant_id: int) -> PasarGuardCredentials:
     rows = (
         await db.scalars(
@@ -36,7 +48,11 @@ async def _credentials(db: AsyncSession, tenant_id: int) -> PasarGuardCredential
     username = values.get("pasarguard_username")
     if not base_url or not api_token:
         raise ValueError("pasarguard_credentials_missing")
-    return PasarGuardCredentials(base_url=base_url, api_token=api_token, username=username)
+    return PasarGuardCredentials(
+        base_url=_normalize_panel_base_url(base_url),
+        api_token=api_token,
+        username=username,
+    )
 
 
 async def _group_ids(db: AsyncSession, tenant_id: int) -> list[int]:
