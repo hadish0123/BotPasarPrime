@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -88,11 +89,15 @@ class Admin(Base):
 class Role(Base):
     __tablename__ = "roles"
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(50), unique=True)
+    name: Mapped[str] = mapped_column(String(50))
     description: Mapped[str | None] = mapped_column(String(255))
     tenant_id: Mapped[int | None] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now)
+    __table_args__ = (
+        Index("uq_roles_global_name", "name", unique=True, postgresql_where=text("tenant_id IS NULL")),
+        Index("uq_roles_tenant_name", "tenant_id", "name", unique=True, postgresql_where=text("tenant_id IS NOT NULL")),
+    )
 
 
 class Permission(Base):
