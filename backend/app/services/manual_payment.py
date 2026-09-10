@@ -3,16 +3,17 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.entities import Order, Payment, TenantSettings, User
+from app.core.config import settings
+from app.models.entities import Order, Payment, SystemSetting, TenantSettings, User
 from app.services.audit import audit_sensitive
 from app.services.payments import transition
 
 
 async def get_tenant_owner_telegram_id(db: AsyncSession, tenant_id: int) -> int:
-    settings = await db.scalar(
+    tenant_settings = await db.scalar(
         select(TenantSettings).where(TenantSettings.tenant_id == tenant_id)
     )
-    value = (settings.settings or {}).get("owner_telegram_id") if settings else None
+    value = (tenant_settings.settings or {}).get("owner_telegram_id") if tenant_settings else None
     try:
         owner_id = int(value)
     except (TypeError, ValueError):
@@ -20,6 +21,29 @@ async def get_tenant_owner_telegram_id(db: AsyncSession, tenant_id: int) -> int:
     if owner_id <= 0:
         raise ValueError("tenant_owner_not_configured")
     return owner_id
+
+
+async def get_manual_card_details(db: AsyncSession) -> tuple[str, str]:
+    number = settings.manual_payment_card_number.strip()
+    holder = settings.manual_payment_card_holder.strip()
+
+    if not number:
+        setting = await db.scalar(
+            select(SystemSetting).where(SystemSetting.key == "manual_payment_card_number")
+        )
+        if setting:
+            number = str(setting.value or "").strip()
+
+    if not holder:
+        setting = await db.scalar(
+            select(SystemSetting).where(SystemSetting.key == "manual_payment_card_holder")
+        )
+        if setting:
+            holder = str(setting.value or "").strip()
+
+    if not number:
+        raise ValueError("manual_payment_card_not_configured")
+    return number, holder
 
 
 async def get_pending_manual_payment_for_user(
@@ -91,7 +115,6 @@ async def verify_manual_payment(
 
     if payment.status in {"paid", "rejected"}:
         return payment
-
     if payment.status != "submitted":
         raise ValueError("payment_not_ready_for_review")
 
