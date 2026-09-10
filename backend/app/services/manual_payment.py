@@ -17,10 +17,19 @@ async def get_tenant_owner_telegram_id(db: AsyncSession, tenant_id: int) -> int:
     try:
         owner_id = int(value)
     except (TypeError, ValueError):
-        raise ValueError("tenant_owner_not_configured") from None
-    if owner_id <= 0:
-        raise ValueError("tenant_owner_not_configured")
-    return owner_id
+        owner_id = 0
+
+    if owner_id > 0:
+        return owner_id
+
+    # Manual payment review must never get stuck merely because a Tenant
+    # does not yet have an explicit owner_telegram_id. Fall back to the
+    # platform administrator configured in the environment.
+    platform_owner = settings.owner_telegram_id
+    if platform_owner and int(platform_owner) > 0:
+        return int(platform_owner)
+
+    raise ValueError("tenant_owner_not_configured")
 
 
 async def get_manual_card_details(db: AsyncSession) -> tuple[str, str]:
@@ -41,9 +50,11 @@ async def get_manual_card_details(db: AsyncSession) -> tuple[str, str]:
         if setting:
             holder = str(setting.value or "").strip()
 
-    if not number:
+    digits = "".join(ch for ch in number if ch.isdigit())
+    if len(digits) != 16:
         raise ValueError("manual_payment_card_not_configured")
-    return number, holder
+
+    return digits, holder
 
 
 async def get_pending_manual_payment_for_user(
@@ -58,7 +69,7 @@ async def get_pending_manual_payment_for_user(
         .where(
             Payment.tenant_id == tenant_id,
             Payment.provider == "manual",
-            Payment.status == "awaiting_payment",
+            Payment.status.in_({"awaiting_payment", "submitted"}),
             Order.tenant_id == tenant_id,
             Order.user_id == user_id,
         )
@@ -84,6 +95,11 @@ async def submit_manual_receipt(
     )
     if not payment:
         raise ValueError("pending_manual_payment_not_found")
+
+    if payment.status == "submitted":
+        if payment.reference == reference:
+            return payment
+        raise ValueError("payment_receipt_already_submitted")
 
     transition(payment, "submitted")
     payment.reference = reference
