@@ -19,4 +19,4 @@ def test_migration_chain_has_single_root_and_current_head() -> None:
     heads = scripts.get_heads()
 
     assert [revision.revision for revision in roots] == ["0001_initial"]
-    assert heads == ["0013_schema_alignment"]
+    assert heads == ["0014_tenant_scoped_role_names"]
