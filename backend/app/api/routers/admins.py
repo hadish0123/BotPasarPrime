@@ -67,16 +67,17 @@ async def list_admins(claims=Depends(require_permission("admins.read")), db: Asy
 @r.post("")
 async def create_admin(x: AdminCreate, claims=Depends(require_permission("admins.write")), db: AsyncSession = Depends(get_db)):
     _tenant_allowed(x.tenant_id, claims)
-    role_query = select(Role).where(Role.name == x.role)
+    role = None
     if x.tenant_id is not None:
-        role_query = role_query.where((Role.tenant_id == x.tenant_id) | (Role.tenant_id.is_(None)))
-    else:
-        role_query = role_query.where(Role.tenant_id.is_(None))
-    role = await db.scalar(role_query)
+        role = await db.scalar(
+            select(Role).where(Role.name == x.role, Role.tenant_id == x.tenant_id)
+        )
+    if role is None:
+        role = await db.scalar(
+            select(Role).where(Role.name == x.role, Role.tenant_id.is_(None))
+        )
     if role is None:
         raise HTTPException(400, "role_not_found")
-    if role.tenant_id is not None and role.tenant_id != x.tenant_id:
-        raise HTTPException(403, "role_tenant_mismatch")
 
     user = await db.scalar(select(User).where(User.telegram_id == x.telegram_id))
     if user is None:
